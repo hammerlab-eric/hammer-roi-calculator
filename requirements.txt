@@ -1,0 +1,4 @@
+openai
+sendgrid
+fpdf
+python-dotenv
