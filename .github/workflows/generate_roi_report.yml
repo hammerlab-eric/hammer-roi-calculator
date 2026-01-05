@@ -28,15 +28,15 @@ jobs:
       # 4. Run the main script (AI + PDF + Email)
       - name: Run ROI Logic
         env:
-          # --- SECRETS (From Repo Settings) ---
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           
-          # --- DATA PAYLOAD (From Website Form) ---
           USER_VERTICAL: ${{ github.event.client_payload.vertical }}
           USER_SPEND: ${{ github.event.client_payload.monthly_spend }}
           USER_EMAIL: ${{ github.event.client_payload.email }}
+          # NEW: Capture CC Email
+          CC_EMAIL: ${{ github.event.client_payload.cc_email }} 
           USER_NAME: ${{ github.event.client_payload.name }}
           
         run: |
