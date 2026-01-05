@@ -1,0 +1,42 @@
+name: Generate ROI Report
+
+# This triggers the action only when a specific "signal" is sent to the repository
+on:
+  repository_dispatch:
+    types: [roi_request]
+
+jobs:
+  build-and-send:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # 1. Download the code from the repo
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      # 2. Install Python environment
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      # 3. Install the libraries from Step 1
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+
+      # 4. Run the main script
+      - name: Run ROI Logic
+        env:
+          # SECRETS: These live in your Repo Settings (we will set these next)
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          
+          # PAYLOAD: This is the data coming from your website form
+          USER_VERTICAL: ${{ github.event.client_payload.vertical }}
+          USER_SPEND: ${{ github.event.client_payload.monthly_spend }}
+          USER_EMAIL: ${{ github.event.client_payload.email }}
+          USER_NAME: ${{ github.event.client_payload.name }}
+          
+        run: |
+          python src/main.py
