@@ -63,10 +63,10 @@
 
             // SECURITY NOTE: In a real production app, this fetch happens on a backend server.
             // For this POC, we are calling GitHub directly from the browser.
-            const REPO_OWNER = 'YOUR_GITHUB_USERNAME'; // <--- CHANGE THIS
+            const REPO_OWNER = 'hammerlab-eric'; // <--- CHANGE THIS
             const REPO_NAME = 'hammer-roi-calculator';
             // We will generate this token in the next step
-            const TOKEN = 'YOUR_GITHUB_PAT_TOKEN'; // <--- CHANGE THIS
+            const TOKEN = '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'; // <--- CHANGE THIS
 
             try {
                 const response = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/dispatches`, {
