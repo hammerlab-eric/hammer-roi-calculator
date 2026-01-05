@@ -10,24 +10,28 @@ SMTP_SERVER = "smtp.zoho.com"
 SMTP_PORT = 465
 
 # 1. Setup & Environment Variables
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+api_key = os.environ.get("OPENAI_API_KEY")
+client = OpenAI(api_key=api_key)
+
+# Debug: Check if key exists (Don't print the whole key!)
+if api_key:
+    print(f"✅ OpenAI API Key loaded (starts with {api_key[:8]}...)")
+else:
+    print("❌ ERROR: OpenAI API Key is MISSING.")
 
 user_vertical = os.environ.get("USER_VERTICAL", "General Business")
 user_spend = os.environ.get("USER_SPEND", "0")
 
 # Email Handling
-smtp_email = os.environ.get("SMTP_EMAIL") # This MUST be sales@hammer-roi.site
+smtp_email = os.environ.get("SMTP_EMAIL") 
 smtp_password = os.environ.get("SMTP_PASSWORD")
 
 user_email = os.environ.get("USER_EMAIL", smtp_email)
-cc_email = os.environ.get("CC_EMAIL", "") # Get CC from env, default to empty
+cc_email = os.environ.get("CC_EMAIL", "") 
 user_name = os.environ.get("USER_NAME", "Valued Customer")
 
 print(f"--- Starting Hammer ROI Engine ---")
-print(f"To: {user_email}")
-if cc_email:
-    print(f"CC: {cc_email}")
-print(f"From: {smtp_email}")
+print(f"Target: {user_name}")
 
 # 2. AI Analysis
 system_prompt = f"""
@@ -35,24 +39,35 @@ You are an expert ROI analyst for Hammer.
 The user is in the {user_vertical} industry with ${user_spend}/mo spend.
 Assume industry waste average is 15%.
 Calculate savings and write a brief, persuasive executive summary.
-Return ONLY valid JSON: {{ "savings": "number (just the value)", "justification": "short text" }}
+Return ONLY valid JSON with this format: {{ "savings": 123.45, "justification": "text here" }}
 """
 
 savings = 0
 justification = "Manual fallback: AI service unavailable."
 
 try:
+    print("Attempting to call OpenAI (gpt-4o)...")
+    # We use gpt-4o as it is the current flagship. 
+    # If this fails with 404, your account might only support gpt-3.5-turbo
     response = client.chat.completions.create(
-        model="gpt-4-turbo", 
+        model="gpt-4o", 
         response_format={ "type": "json_object" },
         messages=[{"role": "system", "content": system_prompt}]
     )
-    data = json.loads(response.choices[0].message.content)
+    
+    raw_content = response.choices[0].message.content
+    print(f"AI Raw Response: {raw_content}") # DEBUG: Print what AI actually said
+    
+    data = json.loads(raw_content)
     savings = data.get('savings', 0)
     justification = data.get('justification', "Analysis complete.")
-    print("AI Analysis successful.")
+    print("✅ AI Analysis successful.")
+
 except Exception as e:
-    print(f"Error calling OpenAI: {e}")
+    print(f"❌ Error calling OpenAI: {e}")
+    # OPTIONAL: Uncomment this if you want to try gpt-3.5 as a backup
+    # print("Attempting fallback to gpt-3.5-turbo...")
+    # ... (repeat call with gpt-3.5-turbo) ...
 
 # 3. Generate PDF
 pdf_filename = "Hammer_ROI_Report.pdf"
@@ -84,21 +99,19 @@ except Exception as e:
 try:
     msg = EmailMessage()
     msg['Subject'] = f'Hammer ROI Report for {user_name}'
-    
-    # CRITICAL: 'From' must match the authenticated account
     msg['From'] = smtp_email 
     msg['To'] = user_email
     
-    # Handle CC
     if cc_email:
         msg['Cc'] = cc_email
-        # Note: smtplib usually handles headers, but sending logic varies
     
     msg.set_content(f"""
     Hello {user_name},
 
     Thank you for using the Hammer ROI Calculator. 
-    Based on your vertical ({user_vertical}), we have identified potential efficiency gains.
+    
+    We have analyzed your monthly spend of ${user_spend}.
+    Based on benchmarks for the {user_vertical} industry, we identified efficiency opportunities.
 
     Please find your detailed Executive Summary attached.
 
@@ -114,15 +127,12 @@ try:
     print(f"Connecting to {SMTP_SERVER}...")
     with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as smtp:
         smtp.login(smtp_email, smtp_password)
-        # We explicitly list all recipients (To + CC) for the envelope
         recipients = [user_email]
         if cc_email:
             recipients.append(cc_email)
-            
         smtp.send_message(msg) 
     
-    print(f"✅ Email sent successfully to {user_email} (and CC: {cc_email})")
+    print(f"✅ Email sent successfully.")
 
 except Exception as e:
     print(f"❌ Failed to send email: {e}")
-    # Don't fail the workflow, so we can still see the Artifact
