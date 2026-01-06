@@ -1,3 +1,6 @@
 openai
 fpdf
 python-dotenv
+langchain==0.1.0
+langchain-openai
+tavily-python
