@@ -1,14 +1,13 @@
 import os
 import io
 import json
-import logging
 from flask import Flask, render_template, request, send_file
 from fpdf import FPDF
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
 from tavily import TavilyClient
 import google.generativeai as genai
-from knowledge_base import PRODUCT_DATA, ROI_ARCHETYPES
+from knowledge_base import PRODUCT_DATA, PRODUCT_MANUALS
 
 import matplotlib
 matplotlib.use('Agg')
@@ -20,15 +19,8 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 ACCESS_CODE = os.getenv("ACCESS_CODE", "Hammer2025!")
 
-# Configure Gemini
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
-
-# --- STYLING ---
-COLOR_PRIMARY = (15, 23, 42)    # Navy
-COLOR_ACCENT = (37, 99, 235)    # Blue
-COLOR_TEXT = (51, 65, 85)       # Slate
-FONT_FAMILY = 'Helvetica'
 
 # --- UTILS ---
 def sanitize_text(text):
@@ -38,299 +30,187 @@ def sanitize_text(text):
     return text.encode('latin-1', 'replace').decode('latin-1')
 
 def get_tavily_context(client_name, client_url, industry):
-    """Agent 2: The Researcher (Uses Tavily)"""
     if not TAVILY_API_KEY: return f"Standard {industry} challenges apply."
     try:
         tavily = TavilyClient(api_key=TAVILY_API_KEY)
-        query = f"What are the top strategic priorities and recent news for {client_name} ({client_url}) in {industry} 2024-2025?"
+        query = f"What are the top strategic priorities for {client_name} ({client_url}) in {industry}?"
         response = tavily.search(query=query, search_depth="basic", max_results=3)
         return "\n".join([f"- {r['content'][:200]}..." for r in response['results']])
     except:
-        return "Standard industry operational pressure."
+        return "Standard industry context."
 
-# --- GEMINI AGENT ENGINE ---
+# --- GEMINI AGENTS ---
 def run_gemini_agent(agent_role, model_name, prompt, beta_mode=False):
-    """
-    Generic handler for calling Gemini Models.
-    """
-    if beta_mode:
-        return None # Skip execution in beta
-        
+    if beta_mode: return None
     try:
         model = genai.GenerativeModel(
             model_name,
-            system_instruction=f"You are a specialized agent: {agent_role}. You output strictly valid JSON."
+            system_instruction=f"You are a specialized agent: {agent_role}. Return valid JSON."
         )
-        
-        response = model.generate_content(
-            prompt,
-            generation_config={"response_mime_type": "application/json"}
-        )
+        response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
         return json.loads(response.text)
     except Exception as e:
         print(f"Gemini Error ({agent_role}): {e}")
         return None
 
 def agent_triage_doctor(client_name, problem_statement, product_name, beta_mode=False):
-    """
-    Agent 1: Diagnoses the problem and selects the best ROI Archetype.
-    """
-    # 1. Get the Menu for this product
-    menu = ROI_ARCHETYPES.get(product_name, {})
-    if not menu:
-        return "default"
-
-    # 2. Construct the "Menu Card" for the AI
-    menu_str = json.dumps(menu, indent=2)
-
-    # 3. The Prompt
+    """ Agent 1: Reads file -> Finds Scenario """
+    manual_text = PRODUCT_MANUALS.get(product_name, "No manual found.")
+    
     prompt = f"""
-    You are a Triage Agent. 
     CLIENT: {client_name}
-    USER PROBLEM: "{problem_statement}"
+    PROBLEM: "{problem_statement}"
+    MANUAL: {manual_text[:50000]} 
     
-    AVAILABLE ROI MODELS (The Menu):
-    {menu_str}
-    
-    TASK: 
-    Compare the USER PROBLEM to the "logic" in the Menu.
-    Select the single best "key" (e.g., 'outage_avoidance' or 'labor_savings') that solves their specific pain.
-    
-    Output JSON ONLY: {{ "selected_key": "..." }}
+    TASK: Read the manual. Identify the ONE 'Usage Scenario' or 'ROI Metric' that best solves the problem.
+    Output JSON: {{ "selected_scenario_name": "Name of scenario", "reasoning": "Why it fits" }}
     """
     
-    if beta_mode:
-        return {"selected_key": "BETA_PREVIEW", "prompt": prompt}
-
-    # 4. Call Gemini Flash (Using specific version -001)
+    if beta_mode: return {"selected_scenario_name": "BETA_PREVIEW", "prompt": prompt}
+    
+    # Use Flash-001 (Fast/High Context)
     result = run_gemini_agent("Triage Doctor", "gemini-1.5-flash-001", prompt)
-    if result and "selected_key" in result:
-        if result["selected_key"] in menu:
-            return result["selected_key"]
-    
-    return list(menu.keys())[0] if menu else "default"
+    return result if result else {"selected_scenario_name": "Standard ROI", "reasoning": "Default"}
 
-def agent_cfo_analyst(client_name, industry, product_name, selected_key, context_text, beta_mode=False):
-    """
-    Agent 3: Constructs the math based on the specific archetype selected.
-    """
-    archetype_data = ROI_ARCHETYPES.get(product_name, {}).get(selected_key, {})
+def agent_cfo_analyst(client_name, industry, product_name, triage_result, context_text, beta_mode=False):
+    """ Agent 3: Reads file -> Calculates Math """
+    manual_text = PRODUCT_MANUALS.get(product_name, "")
+    scenario = triage_result.get("selected_scenario_name", "Standard ROI")
     
     prompt = f"""
-    You are a Financial Analyst.
     CLIENT: {client_name} ({industry})
     PRODUCT: {product_name}
-    SELECTED STRATEGY: {archetype_data.get('title', 'ROI Analysis')}
-    STRATEGY LOGIC: {archetype_data.get('logic', 'Standard Savings')}
-    INDUSTRY CONTEXT: {context_text}
+    SCENARIO: {scenario}
+    CONTEXT: {context_text}
+    MANUAL: {manual_text[:50000]}
     
-    TASK:
-    Generate a JSON object for a Financial Table.
-    Use realistic estimates for {industry}.
-    
-    Required JSON Structure:
+    TASK: Using the logic in the Manual for '{scenario}', generate a financial table.
+    Output JSON: 
     {{
-       "impact": "2-sentence strategic impact statement.",
+       "impact": "2-sentence impact statement.",
        "bullets": ["Bullet 1", "Bullet 2", "Bullet 3"],
        "math_variables": {{
-           "scenario_title": "{archetype_data.get('title', 'ROI Analysis')}",
-           "metric_unit": "e.g., Hours/Year or Incidents/Year",
-           "cost_per_unit_label": "e.g., Avg Hourly Cost",
+           "scenario_title": "{scenario}",
+           "metric_unit": "Unit (e.g. Hours/Year)",
+           "cost_per_unit_label": "Label (e.g. Avg Cost)",
            "cost_per_unit_value": (Number),
-           "before_label": "Current Status",
-           "before_qty": (Number - High),
-           "after_label": "Future Status",
-           "after_qty": (Number - Low)
+           "before_label": "Current State",
+           "before_qty": (Number),
+           "after_label": "Future State",
+           "after_qty": (Number)
        }}
     }}
     """
+    if beta_mode: return prompt
     
-    if beta_mode:
-        return prompt 
-    
-    # Call Gemini Pro (Using specific version -001)
+    # Use Pro-001 (Reasoning)
     return run_gemini_agent("CFO Analyst", "gemini-1.5-pro-001", prompt)
-
 
 def generate_tailored_content(client_name, industry, project_type, context_text, problem_statement, selected_products, mode='live'):
     results = {}
     is_beta = (mode == 'beta')
     
     for prod in selected_products:
-        triage_result = agent_triage_doctor(client_name, problem_statement, prod, beta_mode=is_beta)
+        triage = agent_triage_doctor(client_name, problem_statement, prod, beta_mode=is_beta)
         
         if is_beta:
-            selected_key = "BETA_PREVIEW"
-            triage_prompt_preview = triage_result['prompt']
+            preview = f"--- TRIAGE PROMPT ---\n{triage['prompt']}\n\n--- CFO PROMPT ---\n(Dependent on Triage Output)"
+            results[prod] = {
+                "impact": preview, 
+                "bullets": ["BETA MODE"], 
+                "math_variables": {"scenario_title": "BETA", "cost_per_unit_value":0}
+            }
         else:
-            selected_key = triage_result
-        
-        cfo_result = agent_cfo_analyst(client_name, industry, prod, selected_key, context_text, beta_mode=is_beta)
-        
-        if is_beta:
-             fallback = PRODUCT_DATA.get(prod, {}).get('math_variables', {})
-             preview_text = (
-                 f"--- [AGENT 1: TRIAGE (Flash-001)] ---\n{triage_prompt_preview}\n\n"
-                 f"--- [AGENT 3: CFO (Pro-001)] ---\n{cfo_result}"
-             )
-             results[prod] = {
-                 "impact": preview_text,
-                 "bullets": ["(Beta Mode)", "No API Cost"],
-                 "math_variables": fallback
-             }
-        else:
-             if cfo_result:
-                 results[prod] = cfo_result
-             else:
-                 results[prod] = PRODUCT_DATA.get(prod, {})
+            cfo = agent_cfo_analyst(client_name, industry, prod, triage, context_text)
+            results[prod] = cfo if cfo else PRODUCT_DATA.get(prod, {})
 
     return results
 
-# --- CALCULATOR (Python) ---
+# --- CALCULATOR (Standard) ---
 def calculate_roi(product_data, user_costs):
     results = {}
-    total_investment = 0
-    total_savings = 0
-
-    for prod_name, ai_data in product_data.items():
-        math = ai_data.get('math_variables', PRODUCT_DATA.get(prod_name, {}).get('math_variables'))
+    total_inv = 0
+    total_save = 0
+    for prod, data in product_data.items():
+        math = data.get('math_variables')
         if not math: continue
-
-        cost_monthly = user_costs.get(prod_name, {}).get('cost', 0)
-        term_months = user_costs.get(prod_name, {}).get('term', 12)
-        investment = cost_monthly * term_months
-        total_investment += investment
-
-        term_years = term_months / 12.0
-        unit_cost = math.get('cost_per_unit_value', 0)
-        before_qty = math.get('before_qty', 0)
-        after_qty = math.get('after_qty', 0)
         
-        annual_savings = (unit_cost * before_qty) - (unit_cost * after_qty)
-        term_savings = annual_savings * term_years
+        # Cost
+        cost = user_costs.get(prod, {}).get('cost', 0)
+        term = user_costs.get(prod, {}).get('term', 12)
+        inv = cost * term
+        total_inv += inv
+        
+        # Savings
+        term_years = term / 12.0
+        unit = math.get('cost_per_unit_value', 0)
+        save = (unit * math.get('before_qty', 0) - unit * math.get('after_qty', 0)) * term_years
+        total_save += save
+        
+        results[prod] = {"investment": inv, "savings": save, "math": math}
+        
+    return results, total_inv, total_save
 
-        results[prod_name] = {
-            "investment": investment,
-            "savings": term_savings,
-            "math": math,
-            "roi": ((term_savings - investment)/investment)*100 if investment > 0 else 0
-        }
-        total_savings += term_savings
-
-    return results, total_investment, total_savings
-
-# --- PDF GENERATOR ---
+# --- PDF GENERATOR (Standard) ---
 class ProReportPDF(FPDF):
     def header(self):
-        self.set_fill_color(*COLOR_PRIMARY)
+        self.set_fill_color(15, 23, 42)
         self.rect(0, 0, 210, 20, 'F')
-        self.set_y(5)
-        self.set_font(FONT_FAMILY, 'B', 12)
-        self.set_text_color(255, 255, 255)
-        self.cell(10)
-        self.cell(0, 10, 'STRATEGIC VALUE ANALYSIS', ln=0, align='L')
-        self.set_font(FONT_FAMILY, '', 9)
-        self.cell(0, 10, 'CONFIDENTIAL', ln=1, align='R')
+        self.set_y(5); self.set_font('Helvetica', 'B', 12); self.set_text_color(255, 255, 255)
+        self.cell(10); self.cell(0, 10, 'STRATEGIC VALUE ANALYSIS', ln=0)
         self.ln(10)
-
+    
     def footer(self):
-        self.set_y(-15)
-        self.set_font(FONT_FAMILY, 'I', 8)
-        self.set_text_color(150, 150, 150)
+        self.set_y(-15); self.set_font('Helvetica', 'I', 8); self.set_text_color(150, 150, 150)
         self.cell(0, 10, f'Page {self.page_no()}', align='C')
 
     def chapter_title(self, title):
-        self.set_font(FONT_FAMILY, 'B', 16)
-        self.set_text_color(*COLOR_PRIMARY)
-        self.cell(0, 8, sanitize_text(title), ln=True, align='L')
-        self.set_draw_color(*COLOR_ACCENT)
-        self.set_line_width(0.5)
-        self.line(10, self.get_y()+2, 200, self.get_y()+2)
-        self.ln(10)
+        self.set_font('Helvetica', 'B', 16); self.set_text_color(15, 23, 42)
+        self.cell(0, 8, sanitize_text(title), ln=True)
+        self.line(10, self.get_y()+2, 200, self.get_y()+2); self.ln(10)
 
-    def draw_math_table(self, math_data, savings, investment):
-        self.set_fill_color(248, 250, 252)
-        self.rect(10, self.get_y(), 190, 35, 'F')
+    def draw_math_table(self, math, save, inv):
+        self.set_fill_color(248, 250, 252); self.rect(10, self.get_y(), 190, 35, 'F')
+        self.set_xy(15, self.get_y()+5); self.set_font('Helvetica', 'B', 10); self.set_text_color(15, 23, 42)
+        self.cell(0, 5, f"Scenario: {sanitize_text(math.get('scenario_title', 'ROI'))}", ln=True)
         
-        self.set_xy(15, self.get_y()+5)
-        self.set_font(FONT_FAMILY, 'B', 10)
-        self.set_text_color(*COLOR_PRIMARY)
-        self.cell(0, 5, f"Scenario: {sanitize_text(math_data.get('scenario_title', 'ROI Analysis'))}", ln=True)
+        y = self.get_y() + 2; col1=60; col2=100
+        self.set_font('Helvetica', 'B', 9); self.set_text_color(100,100,100)
+        self.set_xy(15, y); self.cell(col1, 5, "Benchmark:"); self.set_font('Helvetica', ''); self.set_text_color(0)
+        self.cell(col2, 5, f"${math.get('cost_per_unit_value', 0):,.2f} / {sanitize_text(math.get('metric_unit', 'Unit'))}")
         
-        col_1, col_2, y_base = 60, 100, self.get_y() + 2
+        self.set_xy(15, y+6); self.set_font('Helvetica', 'B', 9); self.set_text_color(185, 28, 28)
+        self.cell(col1, 5, sanitize_text(math.get('before_label', 'Before'))); self.set_font('Helvetica', ''); self.set_text_color(0)
+        val = math.get('cost_per_unit_value', 0) * math.get('before_qty', 0)
+        self.cell(col2, 5, f"{math.get('before_qty', 0)} units = ${val:,.0f} Risk")
         
-        self.set_font(FONT_FAMILY, 'B', 9)
-        self.set_text_color(100, 100, 100)
-        self.set_xy(15, y_base)
-        self.cell(col_1, 5, "Industry Benchmark:", ln=0)
-        self.set_font(FONT_FAMILY, '', 9)
-        self.set_text_color(0, 0, 0)
-        self.cell(col_2, 5, f"${math_data.get('cost_per_unit_value', 0):,.2f} per {sanitize_text(math_data.get('metric_unit', 'Unit'))}", ln=1)
+        self.set_xy(15, y+12); self.set_font('Helvetica', 'B', 9); self.set_text_color(22, 163, 74)
+        self.cell(col1, 5, sanitize_text(math.get('after_label', 'After'))); self.set_font('Helvetica', ''); self.set_text_color(0)
+        val = math.get('cost_per_unit_value', 0) * math.get('after_qty', 0)
+        self.cell(col2, 5, f"{math.get('after_qty', 0)} units = ${val:,.0f} Risk")
         
-        self.set_xy(15, y_base + 6)
-        self.set_font(FONT_FAMILY, 'B', 9)
-        self.set_text_color(185, 28, 28)
-        self.cell(col_1, 5, sanitize_text(math_data.get('before_label', 'Before')), ln=0)
-        self.set_font(FONT_FAMILY, '', 9)
-        self.set_text_color(0, 0, 0)
-        val_before = math_data.get('cost_per_unit_value', 0) * math_data.get('before_qty', 0)
-        self.cell(col_2, 5, f"{math_data.get('before_qty', 0)} units = ${val_before:,.0f}/yr Risk", ln=1)
-        
-        self.set_xy(15, y_base + 12)
-        self.set_font(FONT_FAMILY, 'B', 9)
-        self.set_text_color(22, 163, 74)
-        self.cell(col_1, 5, sanitize_text(math_data.get('after_label', 'After')), ln=0)
-        self.set_font(FONT_FAMILY, '', 9)
-        self.set_text_color(0, 0, 0)
-        val_after = math_data.get('cost_per_unit_value', 0) * math_data.get('after_qty', 0)
-        self.cell(col_2, 5, f"{math_data.get('after_qty', 0)} units = ${val_after:,.0f}/yr Risk", ln=1)
-        
-        self.set_xy(130, y_base + 10)
-        self.set_font(FONT_FAMILY, 'B', 12)
-        self.set_text_color(*COLOR_ACCENT)
-        self.cell(60, 10, f"Net Savings: ${savings:,.0f}", align='R')
-        self.ln(20)
+        self.set_xy(130, y+10); self.set_font('Helvetica', 'B', 12); self.set_text_color(37, 99, 235)
+        self.cell(60, 10, f"Net Savings: ${save:,.0f}", align='R'); self.ln(20)
 
     def card_box(self, label, value, subtext, x, y, w, h):
-        self.set_xy(x, y)
-        self.set_fill_color(248, 250, 252)
-        self.set_draw_color(226, 232, 240)
-        self.rect(x, y, w, h, 'DF')
-        self.set_xy(x, y + 5)
-        self.set_font(FONT_FAMILY, 'B', 14)
-        self.set_text_color(*COLOR_ACCENT)
+        self.set_xy(x, y); self.set_fill_color(248, 250, 252); self.rect(x, y, w, h, 'DF')
+        self.set_xy(x, y+5); self.set_font('Helvetica', 'B', 14); self.set_text_color(37, 99, 235)
         self.cell(w, 10, sanitize_text(value), align='C', ln=1)
-        self.set_xy(x, y + 16)
-        self.set_font(FONT_FAMILY, 'B', 9)
-        self.set_text_color(*COLOR_TEXT)
+        self.set_xy(x, y+16); self.set_font('Helvetica', 'B', 9); self.set_text_color(51, 65, 85)
         self.cell(w, 5, sanitize_text(label), align='C', ln=1)
-        self.set_xy(x, y + 22)
-        self.set_font(FONT_FAMILY, '', 7)
-        self.set_text_color(100, 116, 139)
+        self.set_xy(x, y+22); self.set_font('Helvetica', '', 7); self.set_text_color(100, 116, 139)
         self.cell(w, 5, sanitize_text(subtext), align='C')
 
-# --- CHART GENERATOR ---
-def create_payback_chart(one_time_cost, recurring_cost):
+def create_chart(inv, save):
     plt.style.use('seaborn-v0_8-whitegrid')
     fig, ax = plt.subplots(figsize=(7, 3.5))
     months = list(range(13))
-    start_val = -1 * abs(float(one_time_cost or 50000))
-    monthly_gain = (recurring_cost * 2.5) / 12 if recurring_cost > 0 else 5000
-    cash_flow = []
-    current = start_val
-    for m in months:
-        cash_flow.append(current)
-        current += monthly_gain
-    ax.plot(months, cash_flow, color='#2563EB', linewidth=3, marker='o', markersize=6)
-    ax.axhline(0, color='#64748B', linewidth=1.5, linestyle='--')
-    ax.set_title("Cumulative Cash Flow (Year 1)", fontsize=12, fontweight='bold', pad=15, color='#0F172A')
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.grid(True, linestyle=':', alpha=0.6)
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight', dpi=150)
-    plt.close()
-    buf.seek(0)
+    start = -1 * abs(inv)
+    monthly = (save / 12) if save > 0 else 1000
+    flow = [start + (monthly * m) for m in months]
+    ax.plot(months, flow, color='#2563EB', linewidth=3, marker='o'); ax.axhline(0, color='#64748B', linestyle='--')
+    ax.set_title("Cash Flow (Year 1)", fontweight='bold'); ax.grid(True, linestyle=':')
+    buf = io.BytesIO(); plt.savefig(buf, format='png', bbox_inches='tight', dpi=150); plt.close(); buf.seek(0)
     return buf
 
 # --- ROUTES ---
@@ -340,88 +220,60 @@ def index():
 
 @app.route('/generate', methods=['POST'])
 def generate_pdf():
-    if request.form.get('access_code') != ACCESS_CODE: return "Invalid Access Code", 403
-
+    if request.form.get('access_code') != ACCESS_CODE: return "Invalid Code", 403
+    
+    # Inputs
     mode = request.form.get('mode', 'live')
-    client_name = sanitize_text(request.form.get('client_name'))
-    industry = sanitize_text(request.form.get('industry'))
-    project_type = sanitize_text(request.form.get('project_type'))
-    problem_statement = sanitize_text(request.form.get('problem_statement'))
-    selected_products = request.form.getlist('products')
+    client = sanitize_text(request.form.get('client_name'))
+    ind = sanitize_text(request.form.get('industry'))
+    prob = sanitize_text(request.form.get('problem_statement'))
+    prods = request.form.getlist('products')
     
-    # Parse Costs
-    user_costs = {}
-    for prod in selected_products:
+    # Costs
+    costs = {}
+    for p in prods:
         try:
-            cost = float(request.form.get(f'cost_{prod}', 0))
-            term_str = request.form.get(f'term_{prod}', '12')
-            term = float(request.form.get(f'term_custom_{prod}', 12)) if term_str == 'other' else float(term_str)
-            user_costs[prod] = {'cost': cost, 'term': term}
-        except:
-            user_costs[prod] = {'cost': 0, 'term': 12}
-
-    # Execute Agent Chain
-    tavily_context = get_tavily_context(client_name, request.form.get('client_url'), industry)
-    ai_content = generate_tailored_content(client_name, industry, project_type, tavily_context, problem_statement, selected_products, mode)
+            c = float(request.form.get(f'cost_{p}', 0))
+            t_str = request.form.get(f'term_{p}', '12')
+            t = float(request.form.get(f'term_custom_{p}', 12)) if t_str == 'other' else float(t_str)
+            costs[p] = {'cost': c, 'term': t}
+        except: costs[p] = {'cost': 0, 'term': 12}
+        
+    # Execution
+    tavily = get_tavily_context(client, request.form.get('client_url'), ind)
+    ai_data = generate_tailored_content(client, ind, "", tavily, prob, prods, mode)
+    roi, tot_inv, tot_save = calculate_roi(ai_data, costs)
     
-    # Python Calculator
-    roi_data, total_inv, total_save = calculate_roi(ai_content, user_costs)
-
-    # PDF Build
+    # PDF
     pdf = ProReportPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_auto_page_break(True, 15); pdf.add_page()
+    pdf.ln(5); pdf.set_font('Helvetica', 'B', 20); pdf.set_text_color(15, 23, 42)
+    pdf.cell(0, 10, f"Strategic ROI Analysis: {client}", ln=True)
+    pdf.set_font('Helvetica', '', 12); pdf.set_text_color(51, 65, 85)
+    pdf.cell(0, 8, f"Problem: {prob[:60]}...", ln=True); pdf.ln(10)
     
-    # Page 1: Executive Summary
-    pdf.add_page()
-    pdf.ln(5)
-    pdf.set_font(FONT_FAMILY, 'B', 20)
-    pdf.set_text_color(*COLOR_PRIMARY)
-    pdf.cell(0, 10, f"Strategic ROI Analysis: {client_name}", ln=True)
-    pdf.set_font(FONT_FAMILY, '', 12)
-    pdf.set_text_color(*COLOR_TEXT)
-    pdf.cell(0, 8, f"Focus: {project_type} | Problem: {problem_statement[:50]}...", ln=True)
-    pdf.ln(10)
+    y = pdf.get_y(); w, h = 60, 25
+    pdf.card_box("SAVINGS", f"${tot_save:,.0f}", "Total Value", 10, y, w, h)
+    pdf.card_box("INVESTMENT", f"${tot_inv:,.0f}", "Total Cost", 75, y, w, h)
+    roi_pct = ((tot_save-tot_inv)/tot_inv)*100 if tot_inv > 0 else 0
+    pdf.card_box("ROI", f"{roi_pct:.0f}%", "Return", 140, y, w, h)
     
-    # Scorecards
-    y_start = pdf.get_y()
-    card_w, card_h = 60, 25
-    pdf.card_box("PROJECTED SAVINGS", f"${total_save:,.0f}", "Total Contract Value", 10, y_start, card_w, card_h)
-    pdf.card_box("INVESTMENT", f"${total_inv:,.0f}", "Total Cost", 75, y_start, card_w, card_h)
-    roi_pct = ((total_save - total_inv)/total_inv)*100 if total_inv > 0 else 0
-    pdf.card_box("ROI %", f"{roi_pct:.0f}%", "Net Return", 140, y_start, card_w, card_h)
+    pdf.set_y(y + h + 15); chart = create_chart(tot_inv, tot_save)
+    pdf.image(chart, x=10, w=180)
     
-    pdf.set_y(y_start + card_h + 15)
-    chart_img = create_payback_chart(total_inv/2, total_save/12) # Approximation for chart
-    pdf.image(chart_img, x=10, w=180)
-
-    # Product Pages
-    for prod in selected_products:
-        if prod not in ai_content: continue
-        data = ai_content[prod]
-        calc = roi_data.get(prod, {'savings':0, 'investment':0, 'math':{}})
-        
-        pdf.add_page()
-        pdf.chapter_title(f"Analysis: {prod}")
-        
-        pdf.set_font(FONT_FAMILY, 'I', 10)
-        pdf.set_text_color(50,50,50)
-        pdf.multi_cell(0, 5, sanitize_text(data.get('impact', '')))
-        pdf.ln(5)
-        
-        pdf.set_font(FONT_FAMILY, '', 10)
-        pdf.set_text_color(*COLOR_TEXT)
-        for bullet in data.get('bullets', []):
-            pdf.set_x(15)
-            pdf.cell(5, 5, "+", ln=0)
-            pdf.multi_cell(170, 5, sanitize_text(bullet))
+    for p in prods:
+        if p not in ai_data: continue
+        d = ai_data[p]; calc = roi.get(p, {'savings':0, 'investment':0, 'math':{}})
+        pdf.add_page(); pdf.chapter_title(f"Analysis: {p}")
+        pdf.set_font('Helvetica', 'I', 10); pdf.multi_cell(0, 5, sanitize_text(d.get('impact', ''))); pdf.ln(5)
+        pdf.set_font('Helvetica', '', 10)
+        for b in d.get('bullets', []):
+            pdf.set_x(15); pdf.cell(5, 5, "+"); pdf.multi_cell(170, 5, sanitize_text(b))
         pdf.ln(10)
+        if 'math_variables' in d: pdf.draw_math_table(d['math_variables'], calc['savings'], calc['investment'])
         
-        if 'math_variables' in data:
-            pdf.draw_math_table(data['math_variables'], calc['savings'], calc['investment'])
-
-    output_path = "generated_roi_report.pdf"
-    pdf.output(output_path)
-    return send_file(output_path, as_attachment=True)
+    out = "report.pdf"; pdf.output(out)
+    return send_file(out, as_attachment=True)
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
