@@ -1,28 +1,57 @@
 {
-  "verticals": {
-    "Retail": {
-      "pain_points": ["Black Friday Site Crashes", "Seasonal Staff Training Costs", "High Abandonment Rates"],
-      "hammer_solution": "Load Testing & IVR Stress Tests",
-      "roi_formula": "downtime_reduction",
-      "avg_downtime_cost_per_min": 8900
+  "scenarios": {
+    "migration": {
+      "keywords": ["migration", "genesys", "connect", "digital transformation", "cutover", "modernization"],
+      "primary_products": ["Hammer Performance", "Hammer QA"],
+      "narrative": "Migration projects face high 'Day 1' failure risks. Hammer Performance prevents rollback costs, while Hammer QA accelerates the UAT timeline."
     },
-    "Finance": {
-      "pain_points": ["Compliance Fines (MIFID II/PCI)", "Security Breaches", "App Regression Failures"],
-      "hammer_solution": "Automated QA & Voice Watch",
-      "roi_formula": "compliance_risk",
-      "avg_downtime_cost_per_min": 5600
-    },
-    "Healthcare": {
-      "pain_points": ["Patient Data Privacy (HIPAA)", "Emergency Line Availability", "Audio Latency in Telehealth"],
-      "hammer_solution": "Voice Watch (Endpoint Observability)",
-      "roi_formula": "patient_experience",
-      "avg_downtime_cost_per_min": 4500
-    },
-    "General": {
-      "pain_points": ["Agent Inefficiency", "High Telco Costs"],
-      "hammer_solution": "End-to-End Monitoring",
-      "roi_formula": "general_efficiency",
-      "avg_downtime_cost_per_min": 2500
+    "operations": {
+      "keywords": ["sre", "devops", "reliability", "toil", "remote", "hybrid", "bpo"],
+      "primary_products": ["Hammer Edge", "Hammer Ativa", "Hammer VoiceWatch"],
+      "narrative": "Operational toil drains engineering resources. Hammer Edge and Ativa automate root cause analysis, reducing MTTR and ticket volume."
     }
+  },
+  "product_metrics": {
+    "hammer_edge": {
+      "description": "Endpoint & User Experience Monitoring",
+      "source_doc": "Edge ROI.docx",
+      "endpoint_issue_rate": 0.57, 
+      "mttr_reduction": 0.70,
+      "tier1_ticket_cost": 25,
+      "hardware_refresh_savings_per_agent": 150
+    },
+    "hammer_ativa": {
+      "description": "Deep Packet Inspection & Network Assurance",
+      "source_doc": "Ativa Enterprise ROI.docx",
+      "sre_hourly_rate": 115,
+      "avg_war_room_staff": 6,
+      "mtti_reduction_hours": 3,
+      "alarm_compression_ratio": 0.90,
+      "sla_credit_recovery_annual": 12000
+    },
+    "hammer_qa": {
+      "description": "Automated Functional Testing (CI/CD)",
+      "source_doc": "Hammer QA.docx",
+      "manual_test_cost_per_hour": 60,
+      "hours_per_regression_cycle": 40,
+      "cycles_per_year": 12
+    },
+    "hammer_performance": {
+      "description": "Load Testing & Migration Assurance",
+      "source_doc": "Hammer Performance.docx",
+      "avg_rollback_cost": 75000,
+      "si_consultant_rate_daily": 2000,
+      "downtime_cost_per_minute": 5600
+    },
+    "hammer_voicewatch": {
+      "description": "Active Monitoring (TFNs)",
+      "source_doc": "Hammer Voicewatch.docx",
+      "manual_test_time_mins_per_tfn": 5,
+      "tfn_count_estimate": 200
+    }
+  },
+  "defaults": {
+    "avg_agents": 750,
+    "tickets_per_agent_monthly": 1.2
   }
 }
