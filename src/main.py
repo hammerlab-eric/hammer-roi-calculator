@@ -30,10 +30,14 @@ try:
         if not TAVILY_API_KEY:
             return {}
         
-        tavily = TavilyClient(api_key=TAVILY_API_KEY)
-        query = f"Research '{company_name}' ({company_url}). Find: 1. Recent cloud migration news (Genesys, AWS, Azure). 2. Hiring for 'SRE', 'DevOps', or 'Contact Center Engineer'. 3. Estimated agent count or employee size."
-        context = tavily.search(query=query, search_depth="basic") 
-        return context.get('results', [])
+        try:
+            tavily = TavilyClient(api_key=TAVILY_API_KEY)
+            query = f"Research '{company_name}' ({company_url}). Find: 1. Recent cloud migration news. 2. Hiring for 'SRE' or 'DevOps'. 3. Estimated employee/agent count."
+            context = tavily.search(query=query, search_depth="basic") 
+            return context.get('results', [])
+        except Exception as e:
+            print(f"⚠️ Research warning: {e}")
+            return []
 
     # --- 2. THE LOGIC CORE (The ROI Algorithms) ---
     def calculate_hammer_math(agent_count, scenario_type, playbook):
@@ -46,9 +50,8 @@ try:
             "breakdown": {}
         }
 
-        # --- A. SRE / OPERATIONS LOGIC (Hammer Edge + Ativa + VoiceWatch) ---
+        # --- A. SRE / OPERATIONS LOGIC ---
         if scenario_type == "operations" or scenario_type == "hybrid":
-            
             # 1. Hammer Edge
             total_tickets = agent_count * defaults['tickets_per_agent_monthly']
             endpoint_tickets = total_tickets * metrics['hammer_edge']['endpoint_issue_rate']
@@ -56,7 +59,7 @@ try:
             results['breakdown']['Hammer Edge'] = {
                 "value": edge_savings,
                 "narrative": f"Deflecting {int(endpoint_tickets*12):,} endpoint tickets/year (Tier 1 Support).",
-                "source": metrics['hammer_edge']['source_doc']
+                "source": metrics['hammer_edge'].get('source_doc', 'Internal')
             }
 
             # 2. Hammer Ativa
@@ -65,7 +68,7 @@ try:
             results['breakdown']['Hammer Ativa'] = {
                 "value": ativa_total,
                 "narrative": "Reducing 'Mean Time to Innocence' and recovering Vendor SLA credits.",
-                "source": metrics['hammer_ativa']['source_doc']
+                "source": metrics['hammer_ativa'].get('source_doc', 'Internal')
             }
 
             # 3. Hammer VoiceWatch
@@ -74,18 +77,17 @@ try:
             results['breakdown']['Hammer VoiceWatch'] = {
                 "value": vw_savings,
                 "narrative": "Automating manual 'sweeps' of Toll-Free Numbers.",
-                "source": metrics['hammer_voicewatch']['source_doc']
+                "source": metrics['hammer_voicewatch'].get('source_doc', 'Internal')
             }
 
-        # --- B. MIGRATION / PROJECT LOGIC (Hammer Performance + QA) ---
+        # --- B. MIGRATION / PROJECT LOGIC ---
         if scenario_type == "migration" or scenario_type == "hybrid":
-            
             # 4. Hammer Performance
             perf_savings = metrics['hammer_performance']['avg_rollback_cost']
             results['breakdown']['Hammer Performance'] = {
                 "value": perf_savings,
                 "narrative": "Risk Avoidance: Preventing 'Day 1' Rollback & Brand Damage.",
-                "source": metrics['hammer_performance']['source_doc']
+                "source": metrics['hammer_performance'].get('source_doc', 'Internal')
             }
 
             # 5. Hammer QA
@@ -93,52 +95,70 @@ try:
             results['breakdown']['Hammer QA'] = {
                 "value": manual_cost,
                 "narrative": "Accelerating CI/CD by automating manual regression cycles.",
-                "source": metrics['hammer_qa']['source_doc']
+                "source": metrics['hammer_qa'].get('source_doc', 'Internal')
             }
 
         # Sum Totals
         results['total_annual_savings'] = sum(item['value'] for item in results['breakdown'].values())
         return results
 
-    # --- 3. SYNTHESIS AGENT (Decision Making) ---
+    # --- 3. SYNTHESIS AGENT (Robust Parser) ---
     def synthesize_report(research_data, user_spend, playbook):
         print("\n🧠 STEP 2b: Synthesizing Narrative...")
         
-        llm = ChatOpenAI(model="gpt-4-turbo", temperature=0, api_key=OPENAI_API_KEY)
-        
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are a Senior SRE Architect for Hammer."),
-            ("user", """
-            DATA:
-            Research: {research_data}
-            Playbook Scenarios: {playbook_scenarios}
-            User Spend: ${user_spend}
+        try:
+            llm = ChatOpenAI(model="gpt-4-turbo", temperature=0, api_key=OPENAI_API_KEY)
+            
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", "You are a Senior SRE Architect for Hammer. Return ONLY valid JSON."),
+                ("user", """
+                DATA:
+                Research: {research_data}
+                Playbook Scenarios: {playbook_scenarios}
+                User Spend: ${user_spend}
 
-            TASK:
-            1. Analyze the research. Does this look like a 'Migration' (Cloud/Transformation keywords) or 'Operations' (Steady State)?
-            2. Estimate Agent Count based on company size (Default to 750 if unknown).
-            3. Generate an Executive Summary focusing on the identified scenario.
+                TASK:
+                1. Analyze the research.
+                2. Estimate Agent Count (Default 750).
+                3. Determine Scenario: 'migration', 'operations', or 'hybrid'.
+                
+                OUTPUT JSON FORMAT:
+                {{
+                    "detected_scenario": "operations",
+                    "estimated_agent_count": 750,
+                    "executive_summary": "Summary text here.",
+                    "tech_stack_notes": "Technology stack notes."
+                }}
+                """)
+            ])
+            
+            chain = prompt | llm
+            res = chain.invoke({
+                "research_data": str(research_data)[:3000], # Truncate to prevent token overflow
+                "playbook_scenarios": json.dumps(playbook['scenarios']), 
+                "user_spend": str(user_spend)
+            })
 
-            OUTPUT JSON:
-            {{
-                "detected_scenario": "migration OR operations OR hybrid",
+            # --- DEBUG LOGGING ---
+            print(f"DEBUG: AI Raw Response: {res.content}") 
+
+            # Parse JSON
+            clean_content = res.content.replace('```json', '').replace('```', '').strip()
+            ai_data = json.loads(clean_content)
+            print("✅ AI JSON Parsed Successfully.")
+
+        except Exception as e:
+            print(f"⚠️ AI Synthesis Error: {e}")
+            print("⚠️ Switching to FALLBACK MODE.")
+            # Fallback Data to prevent crash
+            ai_data = {
+                "detected_scenario": "operations",
                 "estimated_agent_count": 750,
-                "executive_summary": "3 sentences.",
-                "tech_stack_notes": "Mention specific found tech (e.g. Genesys, Avaya)."
-            }}
-            """)
-        ])
-        
-        chain = prompt | llm
-        res = chain.invoke({
-            "research_data": str(research_data), 
-            "playbook_scenarios": json.dumps(playbook['scenarios']), 
-            "user_spend": str(user_spend)
-        })
-        
-        ai_data = json.loads(res.content.replace('```json', '').replace('```', '').strip())
-        
-        # Run the Math based on AI's decision
+                "executive_summary": "Automated research unavailable. Analysis based on standard industry benchmarks for Enterprise Contact Centers.",
+                "tech_stack_notes": "Standard Enterprise Stack (Assumed)"
+            }
+
+        # Run Math
         math_results = calculate_hammer_math(
             ai_data.get('estimated_agent_count', 750), 
             ai_data.get('detected_scenario', 'operations'),
@@ -147,7 +167,7 @@ try:
         
         return {**ai_data, **math_results}
 
-    # --- 4. PDF GENERATOR (With Citations) ---
+    # --- 4. PDF GENERATOR ---
     def create_pdf(data, company_name, filename="Hammer_ROI_Report.pdf"):
         print("\n📄 STEP 3: Generating V1.2 Report...")
         pdf = FPDF()
@@ -165,13 +185,16 @@ try:
         pdf.set_font("Arial", 'B', size=12)
         pdf.cell(0, 10, txt="1. Strategic Executive Summary", ln=1, fill=True)
         pdf.set_font("Arial", size=11)
-        pdf.multi_cell(0, 7, txt=data.get('executive_summary', ''))
+        # Sanitize text
+        summary = data.get('executive_summary', '').encode('latin-1', 'replace').decode('latin-1')
+        pdf.multi_cell(0, 7, txt=summary)
         pdf.ln(5)
 
         # Tech Stack Note
         if data.get('tech_stack_notes'):
             pdf.set_font("Arial", 'I', size=10)
-            pdf.cell(0, 8, txt=f"Context: {data.get('tech_stack_notes')}", ln=1)
+            stack = data.get('tech_stack_notes', '').encode('latin-1', 'replace').decode('latin-1')
+            pdf.cell(0, 8, txt=f"Context: {stack}", ln=1)
             pdf.ln(5)
 
         # Financial Impact Section
@@ -196,51 +219,43 @@ try:
         pdf.set_font("Arial", size=10)
         for product, details in data['breakdown'].items():
             if details['value'] > 0:
-                # Calculate height for Multi-Cell logic
-                # We need to print Narrative + Source in the 3rd column
-                
                 pdf.cell(60, 16, txt=product, border=1)
                 pdf.cell(40, 16, txt=f"${details['value']:,.0f}", border=1, align='R')
                 
-                # Save x,y position
                 x = pdf.get_x()
                 y = pdf.get_y()
                 
-                # Print Narrative
-                pdf.multi_cell(90, 8, txt=details['narrative'], border='LTR')
+                narrative = details['narrative'].encode('latin-1', 'replace').decode('latin-1')
+                pdf.multi_cell(90, 8, txt=narrative, border='LTR')
                 
-                # Move to bottom half of the cell for Source
                 pdf.set_xy(x, y + 8)
                 pdf.set_font("Arial", 'I', size=7)
                 pdf.set_text_color(100, 100, 100)
-                pdf.cell(90, 8, txt=f"Source: {details.get('source', 'Hammer Internal')}", border='LBR', align='R')
+                source = details.get('source', 'Internal').encode('latin-1', 'replace').decode('latin-1')
+                pdf.cell(90, 8, txt=f"Source: {source}", border='LBR', align='R')
                 
-                # Reset Font
                 pdf.set_font("Arial", size=10)
                 pdf.set_text_color(0, 0, 0)
                 pdf.ln()
 
         pdf.ln(10)
         
-        # Disclaimer
         pdf.set_font("Arial", size=8)
         pdf.set_text_color(100, 100, 100)
-        pdf.multi_cell(0, 5, txt="Disclaimer: These estimates are based on public benchmarks and standard industry assumptions provided by Hammer. Actual savings may vary based on specific environment configurations.")
+        pdf.multi_cell(0, 5, txt="Disclaimer: These estimates are based on public benchmarks and standard industry assumptions provided by Hammer.")
 
         pdf.output(filename)
         print(f"✅ PDF Saved: {filename}")
 
     # --- MAIN EXECUTION FLOW ---
-    print("--- Starting Hammer ROI V1.2.1 (Citations) ---")
+    print("--- Starting Hammer ROI V1.2.2 (Robust Parser) ---")
     
-    # Inputs
     company_name = os.environ.get("USER_NAME", "Valued Client")
     company_url = os.environ.get("USER_URL", "")
     user_email = os.environ.get("USER_EMAIL")
     raw_spend = os.environ.get("USER_SPEND", "0")
     monthly_spend = raw_spend if raw_spend and raw_spend.strip() else "0"
 
-    # Load Playbook
     try:
         with open('src/hammer_playbook.json', 'r') as f:
             playbook = json.load(f)
@@ -248,12 +263,10 @@ try:
         print("❌ CRITICAL: hammer_playbook.json missing.")
         exit(1)
 
-    # Execute
     research = research_company(company_url, company_name)
     final_data = synthesize_report(research, monthly_spend, playbook)
     create_pdf(final_data, company_name)
 
-    # Email (Standard)
     if os.environ.get("SMTP_EMAIL"):
         try:
             print("\n📧 STEP 4: Sending Email...")
@@ -275,8 +288,12 @@ try:
 
     print("✅ Logic Finished Successfully.")
 
-# --- ERROR HANDLING ---
 except Exception as e:
     print(f"\n❌ CRITICAL SYSTEM ERROR: {e}")
     traceback.print_exc()
-    # (Error PDF Code Omitted for brevity)
+    # Basic Error PDF Generation
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    pdf.cell(0, 10, txt="System Error - Report Could Not Be Generated", ln=1)
+    pdf.output("Hammer_ROI_Report.pdf")
