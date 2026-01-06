@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
 from tavily import TavilyClient
 import google.generativeai as genai
-from knowledge_base import PRODUCT_DATA
+from knowledge_base import PRODUCT_DATA, ROI_ARCHETYPES
 
 import matplotlib
 matplotlib.use('Agg')
@@ -57,8 +57,6 @@ def run_gemini_agent(agent_role, model_name, prompt, beta_mode=False):
         return None # Skip execution in beta
         
     try:
-        # Gemini 1.5 supports native JSON schemas, but for simplicity/robustness across versions, 
-        # we'll use the prompt instruction + response_mime_type.
         model = genai.GenerativeModel(
             model_name,
             system_instruction=f"You are a specialized agent: {agent_role}. You output strictly valid JSON."
@@ -73,85 +71,132 @@ def run_gemini_agent(agent_role, model_name, prompt, beta_mode=False):
         print(f"Gemini Error ({agent_role}): {e}")
         return None
 
+def agent_triage_doctor(client_name, problem_statement, product_name, beta_mode=False):
+    """
+    Agent 1: Diagnoses the problem and selects the best ROI Archetype.
+    """
+    # 1. Get the Menu for this product
+    menu = ROI_ARCHETYPES.get(product_name, {})
+    if not menu:
+        return "default"
+
+    # 2. Construct the "Menu Card" for the AI
+    menu_str = json.dumps(menu, indent=2)
+
+    # 3. The Prompt
+    prompt = f"""
+    You are a Triage Agent. 
+    CLIENT: {client_name}
+    USER PROBLEM: "{problem_statement}"
+    
+    AVAILABLE ROI MODELS (The Menu):
+    {menu_str}
+    
+    TASK: 
+    Compare the USER PROBLEM to the "logic" in the Menu.
+    Select the single best "key" (e.g., 'outage_avoidance' or 'labor_savings') that solves their specific pain.
+    
+    Output JSON ONLY: {{ "selected_key": "..." }}
+    """
+    
+    if beta_mode:
+        return {"selected_key": "BETA_PREVIEW", "prompt": prompt}
+
+    # 4. Call Gemini Flash (Fast & Cheap)
+    result = run_gemini_agent("Triage Doctor", "gemini-1.5-flash", prompt)
+    if result and "selected_key" in result:
+        # Validate the key actually exists in the menu
+        if result["selected_key"] in menu:
+            return result["selected_key"]
+    
+    # Fallback: Return the first key in the menu if AI fails or picks invalid key
+    return list(menu.keys())[0] if menu else "default"
+
+def agent_cfo_analyst(client_name, industry, product_name, selected_key, context_text, beta_mode=False):
+    """
+    Agent 3: Constructs the math based on the specific archetype selected.
+    """
+    # 1. Get the specific logic definition
+    archetype_data = ROI_ARCHETYPES.get(product_name, {}).get(selected_key, {})
+    
+    prompt = f"""
+    You are a Financial Analyst.
+    CLIENT: {client_name} ({industry})
+    PRODUCT: {product_name}
+    SELECTED STRATEGY: {archetype_data.get('title', 'ROI Analysis')}
+    STRATEGY LOGIC: {archetype_data.get('logic', 'Standard Savings')}
+    INDUSTRY CONTEXT: {context_text}
+    
+    TASK:
+    Generate a JSON object for a Financial Table.
+    Use realistic estimates for {industry}.
+    
+    Required JSON Structure:
+    {{
+       "impact": "2-sentence strategic impact statement.",
+       "bullets": ["Bullet 1", "Bullet 2", "Bullet 3"],
+       "math_variables": {{
+           "scenario_title": "{archetype_data.get('title', 'ROI Analysis')}",
+           "metric_unit": "e.g., Hours/Year or Incidents/Year",
+           "cost_per_unit_label": "e.g., Avg Hourly Cost",
+           "cost_per_unit_value": (Number),
+           "before_label": "Current Status",
+           "before_qty": (Number - High),
+           "after_label": "Future Status",
+           "after_qty": (Number - Low)
+       }}
+    }}
+    """
+    
+    if beta_mode:
+        return prompt # Return the prompt string for preview
+    
+    # Call Gemini Pro (Smart Reasoning)
+    return run_gemini_agent("CFO Analyst", "gemini-1.5-pro", prompt)
+
+
 def generate_tailored_content(client_name, industry, project_type, context_text, problem_statement, selected_products, mode='live'):
     """
-    The 3-Agent Chain:
-    1. Triage (Gemini Flash) -> 2. Research (Tavily) -> 3. Analysis (Gemini Pro)
+    The 3-Agent Chain Orchestrator
     """
+    results = {}
+    is_beta = (mode == 'beta')
     
-    # Context Loading
-    product_context_str = ""
     for prod in selected_products:
-        if prod in PRODUCT_DATA:
-            product_context_str += f"\nPRODUCT: {prod}\nDESC: {PRODUCT_DATA[prod]['tagline']}\n"
-
-    # --- AGENT 1: TRIAGE DOCTOR (Gemini 1.5 Flash) ---
-    # Task: Analyze the problem and pick the strategy.
-    triage_prompt = f"""
-    CLIENT: {client_name}
-    PROBLEM: "{problem_statement}"
-    PRODUCTS: {product_context_str}
-    
-    TASK: Analyze the USER PROBLEM. For each product, determine the best "ROI Archetype" (e.g., Labor Savings vs. Risk Avoidance).
-    Output JSON: {{ "Product_Name": "Rationale for strategy..." }}
-    """
-    
-    # --- AGENT 3: CFO ANALYST (Gemini 1.5 Pro) ---
-    # Task: Do the detailed logic construction.
-    cfo_prompt = f"""
-    CLIENT: {client_name} ({industry})
-    FOCUS: {project_type}
-    PROBLEM: "{problem_statement}"
-    CONTEXT: {context_text}
-    PRODUCTS: {product_context_str}
-
-    TASK:
-    For each product, generate a JSON object with:
-    1. "impact": 2-sentence strategic impact statement.
-    2. "bullets": 3 Hard Savings bullet points.
-    3. "math_variables": A specific financial scenario.
-       - "scenario_title": Title of the calculation (e.g. "Cost of Downtime")
-       - "metric_unit": Unit of measure
-       - "cost_per_unit_label": e.g. "Avg Cost per Hour"
-       - "cost_per_unit_value": (Number only)
-       - "before_label": e.g. "Current Manual Process"
-       - "before_qty": (Number only)
-       - "after_label": e.g. "With Automation"
-       - "after_qty": (Number only)
-
-    Output pure JSON: {{ "ProductName": {{ "impact": "...", "bullets": [], "math_variables": {{...}} }} }}
-    """
-
-    # --- BETA MODE PREVIEW ---
-    if mode == 'beta':
-        debug_output = {}
-        preview_text = (
-            f"--- [AGENT 1: TRIAGE (Flash)] ---\n{triage_prompt}\n\n"
-            f"--- [AGENT 3: CFO (Pro)] ---\n{cfo_prompt}"
-        )
-        for prod in selected_products:
-            fallback = PRODUCT_DATA.get(prod, {}).get('math_variables', {})
-            debug_output[prod] = {
-                "impact": preview_text,
-                "bullets": ["(Beta Mode)", "No API Cost"],
-                "math_variables": fallback
-            }
-        return debug_output
-
-    if not GOOGLE_API_KEY:
-        return {prod: PRODUCT_DATA.get(prod, {}) for prod in selected_products}
-
-    # Execute Chain
-    # Note: We skip Agent 1 actual call for V1.5 efficiency and just feed the instructions directly 
-    # to Agent 3 (Pro) which is smart enough to do both triage and calc in one shot. 
-    # This saves latency.
-    
-    result = run_gemini_agent("CFO Analyst", "gemini-1.5-pro", cfo_prompt)
-    
-    if not result:
-        return {prod: PRODUCT_DATA.get(prod, {}) for prod in selected_products}
+        # 1. Agent 1: Triage (Selects the Strategy Key)
+        triage_result = agent_triage_doctor(client_name, problem_statement, prod, beta_mode=is_beta)
         
-    return result
+        if is_beta:
+            # In Beta, triage_result is a dict with the prompt
+            selected_key = "BETA_PREVIEW"
+            triage_prompt_preview = triage_result['prompt']
+        else:
+            selected_key = triage_result
+        
+        # 2. Agent 3: CFO (Uses the key from Agent 1)
+        cfo_result = agent_cfo_analyst(client_name, industry, prod, selected_key, context_text, beta_mode=is_beta)
+        
+        if is_beta:
+             # In Beta, cfo_result is just the prompt string
+             fallback = PRODUCT_DATA.get(prod, {}).get('math_variables', {})
+             preview_text = (
+                 f"--- [AGENT 1: TRIAGE (Flash)] ---\n{triage_prompt_preview}\n\n"
+                 f"--- [AGENT 3: CFO (Pro)] ---\n{cfo_result}"
+             )
+             results[prod] = {
+                 "impact": preview_text,
+                 "bullets": ["(Beta Mode)", "No API Cost"],
+                 "math_variables": fallback
+             }
+        else:
+             # In Live, cfo_result is the JSON
+             if cfo_result:
+                 results[prod] = cfo_result
+             else:
+                 # Fallback if Gemini fails
+                 results[prod] = PRODUCT_DATA.get(prod, {})
+
+    return results
 
 # --- CALCULATOR (Python) ---
 def calculate_roi(product_data, user_costs):
@@ -186,7 +231,7 @@ def calculate_roi(product_data, user_costs):
 
     return results, total_investment, total_savings
 
-# --- PDF GENERATOR (ProReportPDF) ---
+# --- PDF GENERATOR ---
 class ProReportPDF(FPDF):
     def header(self):
         self.set_fill_color(*COLOR_PRIMARY)
