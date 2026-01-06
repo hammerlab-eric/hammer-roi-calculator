@@ -2,5 +2,5 @@ flask
 fpdf2
 matplotlib
 tavily-python
-openai
+google-generativeai
 gunicorn
