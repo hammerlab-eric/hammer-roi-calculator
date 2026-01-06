@@ -1,0 +1,28 @@
+{
+  "verticals": {
+    "Retail": {
+      "pain_points": ["Black Friday Site Crashes", "Seasonal Staff Training Costs", "High Abandonment Rates"],
+      "hammer_solution": "Load Testing & IVR Stress Tests",
+      "roi_formula": "downtime_reduction",
+      "avg_downtime_cost_per_min": 8900
+    },
+    "Finance": {
+      "pain_points": ["Compliance Fines (MIFID II/PCI)", "Security Breaches", "App Regression Failures"],
+      "hammer_solution": "Automated QA & Voice Watch",
+      "roi_formula": "compliance_risk",
+      "avg_downtime_cost_per_min": 5600
+    },
+    "Healthcare": {
+      "pain_points": ["Patient Data Privacy (HIPAA)", "Emergency Line Availability", "Audio Latency in Telehealth"],
+      "hammer_solution": "Voice Watch (Endpoint Observability)",
+      "roi_formula": "patient_experience",
+      "avg_downtime_cost_per_min": 4500
+    },
+    "General": {
+      "pain_points": ["Agent Inefficiency", "High Telco Costs"],
+      "hammer_solution": "End-to-End Monitoring",
+      "roi_formula": "general_efficiency",
+      "avg_downtime_cost_per_min": 2500
+    }
+  }
+}
