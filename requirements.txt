@@ -1,6 +1,6 @@
-openai
-fpdf
-python-dotenv
-langchain
-langchain-openai
+flask
+fpdf2
+matplotlib
 tavily-python
+openai
+gunicorn
