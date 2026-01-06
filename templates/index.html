@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ROI Generator | v1.4</title>
+    <title>ROI Generator | Gemini Edition</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         .product-card { transition: all 0.2s; border: 1px solid #e2e8f0; }
@@ -40,7 +40,7 @@
             document.getElementById('modeField').value = mode;
             document.getElementById('btnContainer').classList.add('hidden');
             document.getElementById('loadingContainer').classList.remove('hidden');
-            document.getElementById('loadingText').innerText = mode === 'beta' ? "Building Beta Preview..." : "Generating Analysis...";
+            document.getElementById('loadingText').innerText = mode === 'beta' ? "Building Gemini Preview..." : "Generating Gemini Analysis...";
             document.getElementById('roiForm').submit();
         }
     </script>
@@ -49,7 +49,7 @@
     <div class="max-w-4xl mx-auto py-10 px-4">
         <div class="text-center mb-10">
             <h1 class="text-3xl font-bold text-slate-900">Strategic ROI Generator</h1>
-            <p class="text-slate-500">v1.4 | Hybrid AI Engine</p>
+            <p class="text-slate-500">Powered by Google Gemini</p>
         </div>
 
         <form id="roiForm" action="/generate" method="POST" class="bg-white shadow-xl rounded-xl p-8 border border-slate-200">
@@ -65,12 +65,25 @@
                     <input type="text" name="client_name" required class="w-full border rounded px-3 py-2">
                 </div>
                 <div>
+                    <label class="block text-sm font-medium">Client Website</label>
+                    <input type="url" name="client_url" class="w-full border rounded px-3 py-2">
+                </div>
+                <div>
                     <label class="block text-sm font-medium">Industry</label>
                     <input type="text" name="industry" required class="w-full border rounded px-3 py-2">
                 </div>
+                <div>
+                    <label class="block text-sm font-medium">Focus Area</label>
+                    <select name="project_type" class="w-full border rounded px-3 py-2 bg-white">
+                        <option value="Operational Efficiency">Operational Efficiency</option>
+                        <option value="Migration">Cloud Migration</option>
+                        <option value="CX">CX Transformation</option>
+                        <option value="DevOps">DevOps Automation</option>
+                    </select>
+                </div>
                 <div class="col-span-1 md:col-span-2">
                     <label class="block text-sm font-medium">Problem Statement</label>
-                    <textarea name="problem_statement" class="w-full border rounded px-3 py-2 h-20" placeholder="Describe the client's pain point..."></textarea>
+                    <textarea name="problem_statement" class="w-full border rounded px-3 py-2 h-20" placeholder="e.g. We are spending too much on manual testing..."></textarea>
                 </div>
             </div>
 
@@ -91,16 +104,16 @@
                         <div>
                             <label class="block text-xs font-bold text-slate-500 uppercase">Term Length</label>
                             <select name="term_{{ product }}" class="w-full border rounded px-2 py-1" onchange="toggleCustomTerm(this, '{{ product }}')">
-                                <option value="12">12 Months (1 Year)</option>
-                                <option value="24">24 Months (2 Years)</option>
-                                <option value="36">36 Months (3 Years)</option>
-                                <option value="1">1 Month (Pilot)</option>
+                                <option value="12">1 Year</option>
+                                <option value="24">2 Years</option>
+                                <option value="36">3 Years</option>
+                                <option value="1">1 Month</option>
                                 <option value="other">Custom...</option>
                             </select>
                         </div>
                         <div>
                             <label class="block text-xs font-bold text-slate-500 uppercase">&nbsp;</label>
-                            <input type="number" step="0.25" id="custom_term_{{ product }}" name="term_custom_{{ product }}" placeholder="Months (0.25 - 64)" class="hidden w-full border rounded px-2 py-1 bg-yellow-50">
+                            <input type="number" step="0.25" id="custom_term_{{ product }}" name="term_custom_{{ product }}" placeholder="Months" class="hidden w-full border rounded px-2 py-1 bg-yellow-50">
                         </div>
                     </div>
                 </div>
