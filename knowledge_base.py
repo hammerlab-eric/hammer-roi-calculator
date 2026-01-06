@@ -1,5 +1,6 @@
 # knowledge_base.py
 
+# 1. STATIC PRODUCT DATA (Fallbacks & General Info)
 PRODUCT_DATA = {
     "Hammer VoiceExplorer": {
         "tagline": "Automated Discovery & Documentation",
@@ -9,7 +10,6 @@ PRODUCT_DATA = {
             "Prevents migration delays caused by 'discovery' phases."
         ],
         "soft_roi": "Accelerates cloud migration by creating a 'Digital Twin' of legacy systems.",
-        # Fallback Math if AI fails
         "math_variables": {
             "scenario_title": "Migration Discovery Efficiency",
             "metric_unit": "Engineer Hours/Year",
@@ -114,6 +114,88 @@ PRODUCT_DATA = {
             "before_qty": 5000,
             "after_label": "Edge Diagnostic Data",
             "after_qty": 2500
+        }
+    }
+}
+
+# 2. AGENT "MENU" (The Brain Logic)
+# These map specific user problems to the correct math model.
+ROI_ARCHETYPES = {
+    "Hammer VoiceWatch": {
+        "outage_avoidance": {
+            "title": "Cost of Downtime (Revenue Protection)",
+            "logic": "Detects outages early -> Reduces Downtime Minutes -> Saves Revenue.",
+            [cite_start]"source_doc": "VoiceWatch ROI: 'Cost of Downtime Avoided' & 'Revenue Protection' [cite: 236]"
+        },
+        "labor_savings": {
+            "title": "Operational Efficiency (Manual Testing)",
+            "logic": "Automates manual TFN sweeps -> Reduces FTE Hours -> Saves Labor Cost.",
+            [cite_start]"source_doc": "VoiceWatch ROI: 'Testing Efficiency (Labor Savings)' [cite: 243]"
+        },
+        "mttr_reduction": {
+            "title": "Mean Time to Repair (MTTR)",
+            "logic": "Pinpoints root cause (Carrier vs Internal) -> Faster Fixes -> Lower Support Costs.",
+            [cite_start]"source_doc": "VoiceWatch ROI: 'Mean Time to Repair' [cite: 246]"
+        }
+    },
+    "Hammer QA": {
+        "defect_escape": {
+            "title": "Defect Escape Ratio (Risk)",
+            "logic": "Catches bugs in Dev -> Prevents Prod Defects -> Avoids Emergency Fix Costs.",
+            [cite_start]"source_doc": "Hammer QA: 'Defect Escape Ratio' [cite: 93]"
+        },
+        "regression_speed": {
+            "title": "Regression Testing Velocity",
+            "logic": "Parallel execution -> Reduces Cycle Time -> Increases Release Velocity.",
+            [cite_start]"source_doc": "Hammer QA: 'Accelerated Scenarios' [cite: 125]"
+        }
+    },
+    "Hammer VoiceExplorer": {
+        "migration_speed": {
+            "title": "Migration De-Risking (Discovery)",
+            "logic": "Automated discovery -> Prevents 'Discovery Phase' delays -> Faster Cloud Migration.",
+            [cite_start]"source_doc": "VoiceExplorer: 'Migration Readiness' [cite: 147]"
+        },
+        "doc_labor": {
+            "title": "Documentation Labor Savings",
+            "logic": "Automated mapping -> Replaces manual Visio/Excel work -> Saves Engineer Hours.",
+            [cite_start]"source_doc": "VoiceExplorer: 'Documentation Effort Reduction' [cite: 184]"
+        }
+    },
+    "Hammer Performance": {
+        "outage_risk": {
+            "title": "Peak Traffic Stability",
+            "logic": "Stress tests pre-go-live -> Prevents crashes -> Avoids Revenue Loss.",
+            [cite_start]"source_doc": "Hammer Performance: 'Downtime Cost Avoidance' [cite: 90]"
+        },
+        "troubleshooting": {
+            "title": "War Room Avoidance",
+            "logic": "Proactive testing -> Fewer P1 Incidents -> Less Overtime/All-Hands calls.",
+            [cite_start]"source_doc": "Hammer Performance: 'Labor Savings (Troubleshooting)' [cite: 100]"
+        }
+    },
+    "Ativa Enterprise": {
+        "sla_credits": {
+            "title": "Vendor Accountability (SLA Recovery)",
+            "logic": "Monitors Carrier SLAs -> Proves violations -> Recovers Cash Credits.",
+            [cite_start]"source_doc": "Ativa ROI: 'SLA Credit Recovery' [cite: 286]"
+        },
+        "mttr_innocence": {
+            "title": "Mean Time to Innocence",
+            "logic": "Isolates Network vs App faults -> Stops Finger-pointing -> Saves Eng. Hours.",
+            [cite_start]"source_doc": "Ativa ROI: 'Mean Time to Innocence' [cite: 297]"
+        }
+    },
+    "Hammer Edge": {
+        "hardware_refresh": {
+            "title": "Hardware Refresh Optimization",
+            "logic": "Identifies actual PC health -> Prevents blanket PC replacements -> Saves CAPEX.",
+            [cite_start]"source_doc": "Hammer Edge: 'Hardware Refresh Optimization' [cite: 33]"
+        },
+        "ticket_deflection": {
+            "title": "Tier 1 Ticket Deflection",
+            "logic": "Self-healing/diagnosis -> Resolves WiFi issues at L1 -> Avoids L2/L3 escalation.",
+            [cite_start]"source_doc": "Hammer Edge: 'Tier 1 Ticket Deflection' [cite: 37]"
         }
     }
 }
