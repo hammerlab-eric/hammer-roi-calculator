@@ -54,6 +54,7 @@ def sanitize_text(text):
 
 # --- AI ENGINE ---
 def get_tavily_context(client_name, client_url, industry):
+    """Fetches live strategic news via Tavily."""
     if not TAVILY_API_KEY:
         return f"Standard {industry} challenges apply."
 
@@ -70,18 +71,20 @@ def get_tavily_context(client_name, client_url, industry):
         print(f"Tavily Error: {e}")
         return f"Could not fetch live data. Assuming standard {industry} operational pressure."
 
-def generate_tailored_content(client_name, industry, project_type, context_text, problem_statement, selected_products):
-    if not OPENAI_API_KEY:
-        return {prod: {"impact": PRODUCT_DATA[prod]['soft_roi'][0], "bullets": PRODUCT_DATA[prod]['hard_roi']} for prod in selected_products if prod in PRODUCT_DATA}
-
-    client = OpenAI(api_key=OPENAI_API_KEY)
+def generate_tailored_content(client_name, industry, project_type, context_text, problem_statement, selected_products, mode='live'):
+    """
+    If mode='live': Calls OpenAI to rewrite content.
+    If mode='beta': Returns the RAW PROMPT TEXT so developers can debug costs/inputs.
+    """
     
+    # 1. Build the Product Context String
     product_context_str = ""
     for prod in selected_products:
         if prod in PRODUCT_DATA:
             p_data = PRODUCT_DATA[prod]
             product_context_str += f"\nPRODUCT: {prod}\nWHAT IT DOES: {p_data['tagline']}\nKEY SPECS: {', '.join(p_data['hard_roi'])}\n"
 
+    # 2. Construct the Prompts
     system_prompt = "You are a Senior Solutions Engineer writing a business case."
     user_prompt = f"""
     CLIENT: {client_name}
@@ -104,6 +107,31 @@ def generate_tailored_content(client_name, industry, project_type, context_text,
 
     Output pure JSON format: {{ "ProductName": {{ "impact": "...", "bullets": ["...", "...", "..."] }} }}
     """
+
+    # --- BETA MODE CHECK ---
+    if mode == 'beta':
+        # Construct a Debug Object
+        debug_output = {}
+        # We create a visualization of the prompt
+        prompt_preview = (
+            f"--- [BETA MODE] RAW PROMPT PREVIEW (NO COST) ---\n\n"
+            f"[SYSTEM PROMPT]:\n{system_prompt}\n\n"
+            f"--- [USER PROMPT START] ---\n{user_prompt}\n--- [USER PROMPT END] ---"
+        )
+        
+        for prod in selected_products:
+            debug_output[prod] = {
+                "impact": prompt_preview, # Inject the Prompt into the PDF text box
+                "bullets": ["(Beta Mode Active)", "Review the Prompt above", "No API Cost Incurred"]
+            }
+        return debug_output
+    # -----------------------
+
+    # Live Mode Execution
+    if not OPENAI_API_KEY:
+        return {prod: {"impact": PRODUCT_DATA[prod]['soft_roi'][0], "bullets": PRODUCT_DATA[prod]['hard_roi']} for prod in selected_products if prod in PRODUCT_DATA}
+
+    client = OpenAI(api_key=OPENAI_API_KEY)
 
     try:
         completion = client.chat.completions.create(
@@ -221,6 +249,7 @@ def generate_pdf():
         return "Invalid Access Code", 403
 
     # 1. Inputs
+    mode = request.form.get('mode', 'live') # Capture Mode (beta vs live)
     client_name = sanitize_text(request.form.get('client_name'))
     client_url = request.form.get('client_url')
     industry = sanitize_text(request.form.get('industry'))
@@ -239,7 +268,8 @@ def generate_pdf():
     tavily_raw = get_tavily_context(client_name, client_url, industry)
     tavily_context = sanitize_text(tavily_raw)
     
-    ai_product_content = generate_tailored_content(client_name, industry, project_type, tavily_context, problem_statement, selected_products)
+    # PASS MODE TO GENERATOR
+    ai_product_content = generate_tailored_content(client_name, industry, project_type, tavily_context, problem_statement, selected_products, mode=mode)
 
     # 3. PDF Construction
     pdf = ProReportPDF()
@@ -320,18 +350,11 @@ def generate_pdf():
             
             pdf.set_font('Helvetica', '', 10)
             pdf.set_text_color(*COLOR_TEXT)
-            
-            # --- FIXED BULLET SECTION ---
             for bullet in content['bullets']:
-                # Save cursor position
                 current_y = pdf.get_y()
-                # Indent 5mm
                 pdf.set_x(15) 
-                # Print Bullet
                 pdf.cell(5, 5, "+", ln=0)
-                # Print Text with EXPLICIT WIDTH (170mm) to prevent overflow error
                 pdf.multi_cell(170, 5, sanitize_text(bullet))
-            # ---------------------------
             pdf.ln(5)
 
     # PAGE 4: INVESTMENT
