@@ -1,9 +1,7 @@
 import os
 import glob
-from docx import Document
 
 # 1. STATIC UI DATA (The "Menu" for your Frontend)
-# We keep this hardcoded so your Checkboxes and PDF Bullets always look clean/marketing-ready.
 PRODUCT_DATA = {
     "Hammer VoiceExplorer": {
         "tagline": "Automated Discovery & Documentation",
@@ -31,27 +29,25 @@ PRODUCT_DATA = {
     }
 }
 
-# 2. DYNAMIC KNOWLEDGE LOADER (The "Brain")
-# This reads the .docx files from the /docs folder map them to products.
+# 2. DYNAMIC TEXT LOADER (The "Brain")
 def load_manuals():
     manuals = {}
     docs_path = os.path.join(os.path.dirname(__file__), 'docs')
     
     # Check if docs folder exists
     if not os.path.exists(docs_path):
-        print("WARNING: 'docs' folder not found. Agents will have no memory.")
+        print("WARNING: 'docs' folder not found.")
         return manuals
 
-    # Get all .docx files
-    files = glob.glob(os.path.join(docs_path, "*.docx"))
+    # Get all .txt files
+    files = glob.glob(os.path.join(docs_path, "*.txt"))
     
-    print(f"Loading {len(files)} manuals from {docs_path}...")
+    print(f"Loading {len(files)} text manuals from {docs_path}...")
 
     for filepath in files:
         filename = os.path.basename(filepath)
         
-        # Simple fuzzy matching to map Filenames -> Product Keys
-        # This allows you to name files "Hammer_VoiceWatch_v2.docx" and it still works.
+        # Simple Key Matching
         key = None
         if "VoiceWatch" in filename or "Voicewatch" in filename: key = "Hammer VoiceWatch"
         elif "VoiceExplorer" in filename: key = "Hammer VoiceExplorer"
@@ -62,9 +58,9 @@ def load_manuals():
         
         if key:
             try:
-                doc = Document(filepath)
-                full_text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
-                manuals[key] = full_text
+                # Open as standard text file
+                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                    manuals[key] = f.read()
                 print(f" -> Loaded memory for: {key}")
             except Exception as e:
                 print(f" -> ERROR reading {filename}: {e}")
