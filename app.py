@@ -27,17 +27,40 @@ COLOR_TEXT = (51, 65, 85)       # Slate 700
 COLOR_LIGHT = (241, 245, 249)   # Slate 100
 FONT_FAMILY = 'Helvetica'
 
+# --- TEXT SANITIZER (THE FIX) ---
+def sanitize_text(text):
+    """
+    Replaces incompatible Unicode characters with Latin-1 safe equivalents.
+    Fixes the FPDFUnicodeEncodingException.
+    """
+    if not isinstance(text, str):
+        return str(text)
+    
+    replacements = {
+        '\u2013': '-',   # En-dash
+        '\u2014': '--',  # Em-dash
+        '\u2018': "'",   # Left single quote
+        '\u2019': "'",   # Right single quote
+        '\u201c': '"',   # Left double quote
+        '\u201d': '"',   # Right double quote
+        '\u2026': '...', # Ellipsis
+        '\u00a0': ' ',   # Non-breaking space
+        '\u2022': '*'    # Bullet point
+    }
+    
+    for char, replacement in replacements.items():
+        text = text.replace(char, replacement)
+        
+    # Final safety net: encode to latin-1, replacing errors with '?'
+    return text.encode('latin-1', 'replace').decode('latin-1')
+
 # --- AI ENGINE ---
 def get_tavily_context(client_name, client_url, industry):
-    """
-    Uses Tavily to find specific strategic news about the client.
-    """
     if not TAVILY_API_KEY:
         return f"Standard {industry} challenges apply."
 
     try:
         tavily = TavilyClient(api_key=TAVILY_API_KEY)
-        # Targeted query to find strategic drivers
         query = f"What are the top strategic priorities and recent news for {client_name} ({client_url}) in {industry} 2024-2025?"
         response = tavily.search(query=query, search_depth="basic", max_results=3)
         
@@ -50,16 +73,11 @@ def get_tavily_context(client_name, client_url, industry):
         return f"Could not fetch live data. Assuming standard {industry} operational pressure."
 
 def generate_tailored_content(client_name, industry, project_type, context_text, problem_statement, selected_products):
-    """
-    Uses OpenAI to rewrite product value props based on the specific client context AND user problem statement.
-    """
     if not OPENAI_API_KEY:
-        # FALLBACK: If no AI key, use the static Knowledge Base directly
         return {prod: {"impact": PRODUCT_DATA[prod]['soft_roi'][0], "bullets": PRODUCT_DATA[prod]['hard_roi']} for prod in selected_products if prod in PRODUCT_DATA}
 
     client = OpenAI(api_key=OPENAI_API_KEY)
     
-    # Prepare Product Context for the LLM
     product_context_str = ""
     for prod in selected_products:
         if prod in PRODUCT_DATA:
@@ -102,7 +120,6 @@ def generate_tailored_content(client_name, industry, project_type, context_text,
         return json.loads(completion.choices[0].message.content)
     except Exception as e:
         print(f"OpenAI Error: {e}")
-        # Fallback to static data
         return {prod: {"impact": PRODUCT_DATA[prod]['soft_roi'][0], "bullets": PRODUCT_DATA[prod]['hard_roi']} for prod in selected_products if prod in PRODUCT_DATA}
 
 # --- PRO CHART GENERATION ---
@@ -164,7 +181,7 @@ class ProReportPDF(FPDF):
     def chapter_title(self, title):
         self.set_font(FONT_FAMILY, 'B', 16)
         self.set_text_color(*COLOR_PRIMARY)
-        self.cell(0, 8, title, ln=True, align='L')
+        self.cell(0, 8, sanitize_text(title), ln=True, align='L')
         self.set_draw_color(*COLOR_ACCENT)
         self.set_line_width(0.5)
         self.line(10, self.get_y()+2, 200, self.get_y()+2)
@@ -178,20 +195,20 @@ class ProReportPDF(FPDF):
         self.set_xy(x, y + 5)
         self.set_font(FONT_FAMILY, 'B', 14)
         self.set_text_color(*COLOR_ACCENT)
-        self.cell(w, 10, value, align='C', ln=1)
+        self.cell(w, 10, sanitize_text(value), align='C', ln=1)
         self.set_xy(x, y + 16)
         self.set_font(FONT_FAMILY, 'B', 9)
         self.set_text_color(*COLOR_TEXT)
-        self.cell(w, 5, label, align='C', ln=1)
+        self.cell(w, 5, sanitize_text(label), align='C', ln=1)
         self.set_xy(x, y + 22)
         self.set_font(FONT_FAMILY, '', 7)
         self.set_text_color(100, 116, 139)
-        self.cell(w, 5, subtext, align='C')
+        self.cell(w, 5, sanitize_text(subtext), align='C')
 
     def section_text(self, text, style=''):
         self.set_font(FONT_FAMILY, style, 10)
         self.set_text_color(*COLOR_TEXT)
-        self.multi_cell(0, 5, text)
+        self.multi_cell(0, 5, sanitize_text(text))
         self.ln(2)
 
 # --- ROUTES ---
@@ -206,12 +223,12 @@ def generate_pdf():
     if user_code != ACCESS_CODE:
         return "Invalid Access Code", 403
 
-    # 1. Inputs
-    client_name = request.form.get('client_name')
+    # 1. Inputs (WITH SANITIZATION)
+    client_name = sanitize_text(request.form.get('client_name'))
     client_url = request.form.get('client_url')
-    industry = request.form.get('industry')
-    project_type = request.form.get('project_type') or "Operational Efficiency"
-    problem_statement = request.form.get('problem_statement') or "General efficiency improvements"
+    industry = sanitize_text(request.form.get('industry'))
+    project_type = sanitize_text(request.form.get('project_type') or "Operational Efficiency")
+    problem_statement = sanitize_text(request.form.get('problem_statement') or "General efficiency improvements")
     selected_products = request.form.getlist('products')
     
     try:
@@ -222,9 +239,9 @@ def generate_pdf():
         recurring_cost = 0
 
     # 2. AI Intelligence Layer
-    tavily_context = get_tavily_context(client_name, client_url, industry)
+    tavily_raw = get_tavily_context(client_name, client_url, industry)
+    tavily_context = sanitize_text(tavily_raw) # Sanitize the API response
     
-    # Generate tailored content passing the PROBLEM STATEMENT
     ai_product_content = generate_tailored_content(client_name, industry, project_type, tavily_context, problem_statement, selected_products)
 
     # 3. PDF Construction
@@ -265,12 +282,12 @@ def generate_pdf():
     pdf.add_page()
     pdf.chapter_title("1. Strategic Context & Risks")
     
-    # Display the Problem Statement clearly
-    pdf.set_fill_color(254, 242, 242) # Light Red
+    # Problem Statement
+    pdf.set_fill_color(254, 242, 242)
     pdf.rect(10, pdf.get_y(), 190, 20, 'F')
     pdf.set_xy(15, pdf.get_y() + 5)
     pdf.set_font('Helvetica', 'B', 10)
-    pdf.set_text_color(185, 28, 28) # Dark Red
+    pdf.set_text_color(185, 28, 28)
     pdf.cell(0, 5, "Defined Problem Statement:", ln=True)
     pdf.set_font('Helvetica', 'I', 10)
     pdf.set_text_color(50, 50, 50)
@@ -280,6 +297,7 @@ def generate_pdf():
     pdf.section_text(f"Our research into {client_name}'s current environment and the broader {industry} landscape highlights several key drivers:")
     pdf.ln(5)
     
+    # Tavily Context
     pdf.set_fill_color(*COLOR_LIGHT)
     pdf.set_font('Helvetica', 'I', 10)
     pdf.set_text_color(*COLOR_TEXT)
@@ -302,7 +320,7 @@ def generate_pdf():
             pdf.ln(2)
             pdf.set_font('Helvetica', 'I', 10)
             pdf.set_text_color(80, 80, 80)
-            pdf.multi_cell(0, 5, content['impact']) 
+            pdf.multi_cell(0, 5, sanitize_text(content['impact'])) # Sanitize AI output
             pdf.ln(3)
             
             pdf.set_font('Helvetica', '', 10)
@@ -310,7 +328,7 @@ def generate_pdf():
             for bullet in content['bullets']:
                 pdf.cell(5)
                 pdf.cell(5, 5, "+", ln=0)
-                pdf.multi_cell(0, 5, bullet)
+                pdf.multi_cell(0, 5, sanitize_text(bullet)) # Sanitize AI output
             pdf.ln(5)
 
     # PAGE 4: INVESTMENT
