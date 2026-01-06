@@ -4,4 +4,3 @@ matplotlib
 tavily-python
 google-generativeai
 gunicorn
-python-docx
