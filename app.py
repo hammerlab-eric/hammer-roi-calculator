@@ -69,7 +69,7 @@ def agent_triage_doctor(client_name, problem_statement, product_name, beta_mode=
     if beta_mode: return {"selected_scenario_name": "BETA_PREVIEW", "prompt": prompt}
     
     # Use Flash-001 (Fast/High Context)
-    result = run_gemini_agent("Triage Doctor", "gemini-1.5-flash-001", prompt)
+    result = run_gemini_agent("Triage Doctor", "gemini-2.5-flash", prompt)
     return result if result else {"selected_scenario_name": "Standard ROI", "reasoning": "Default"}
 
 def agent_cfo_analyst(client_name, industry, product_name, triage_result, context_text, beta_mode=False):
@@ -104,7 +104,7 @@ def agent_cfo_analyst(client_name, industry, product_name, triage_result, contex
     if beta_mode: return prompt
     
     # Use Pro-001 (Reasoning)
-    return run_gemini_agent("CFO Analyst", "gemini-1.5-pro-001", prompt)
+    return run_gemini_agent("CFO Analyst", "gemini-2.5-pro", prompt)
 
 def generate_tailored_content(client_name, industry, project_type, context_text, problem_statement, selected_products, mode='live'):
     results = {}
