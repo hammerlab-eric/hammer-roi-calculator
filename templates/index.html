@@ -3,79 +3,104 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ROI Generator | Team Edition</title>
+    <title>ROI Generator | AI Edition</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         .checkbox-card input:checked + div {
             border-color: #2563eb;
             background-color: #eff6ff;
+            box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.1), 0 2px 4px -1px rgba(37, 99, 235, 0.06);
+        }
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top: 4px solid white;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
     </style>
+    <script>
+        function showLoading() {
+            document.getElementById('submitBtn').classList.add('hidden');
+            document.getElementById('loadingBtn').classList.remove('hidden');
+        }
+    </script>
 </head>
-<body class="bg-gray-100 text-gray-800 font-sans">
+<body class="bg-slate-50 text-slate-800 font-sans">
 
     <div class="max-w-4xl mx-auto py-10 px-4">
         <div class="mb-10 text-center">
-            <h1 class="text-3xl font-bold text-gray-900">ROI Report Generator</h1>
-            <p class="text-gray-500 mt-2">Internal Tool for Solution Engineering</p>
+            <h1 class="text-3xl font-bold text-slate-900">Strategic ROI Generator</h1>
+            <p class="text-slate-500 mt-2">AI-Powered Business Case Builder</p>
         </div>
 
-        <form action="/generate" method="POST" class="bg-white shadow-xl rounded-xl p-8 border border-gray-200">
+        <form action="/generate" method="POST" class="bg-white shadow-xl rounded-xl p-8 border border-slate-200" onsubmit="showLoading()">
             
             <div class="mb-8 bg-red-50 p-4 rounded-lg border border-red-100">
-                <label class="block text-sm font-bold text-red-700 mb-1">Access Code (Required)</label>
-                <input type="password" name="access_code" required placeholder="Enter Team Password" class="w-full border rounded px-4 py-2 focus:ring-2 focus:ring-red-500 outline-none">
+                <label class="block text-sm font-bold text-red-700 mb-1">Access Code</label>
+                <input type="password" name="access_code" required placeholder="Team Password" class="w-full border border-red-200 rounded px-4 py-2 focus:ring-2 focus:ring-red-500 outline-none">
             </div>
 
             <div class="mb-8">
-                <h2 class="text-xl font-semibold mb-4 border-b pb-2">1. Client Context</h2>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <h2 class="text-xl font-semibold mb-4 border-b pb-2 text-slate-800">1. Client Intelligence</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Client Name</label>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Client Name</label>
                         <input type="text" name="client_name" required placeholder="e.g. Acme Corp" class="w-full border rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none">
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Industry</label>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Client Website (For AI Research)</label>
+                        <input type="url" name="client_url" placeholder="https://www.acme.com" class="w-full border rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Industry</label>
                         <input type="text" name="industry" required placeholder="e.g. Healthcare, Finance" class="w-full border rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none">
                     </div>
+                     <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Project Focus (Optional)</label>
+                        <select name="project_type" class="w-full border rounded-lg px-4 py-2 bg-white">
+                            <option value="">-- Let AI Decide --</option>
+                            <option value="Migration">Migration (Legacy to Cloud)</option>
+                            <option value="DevOps">DevOps / CI/CD Transformation</option>
+                            <option value="Operations">Operational Efficiency</option>
+                            <option value="CX">CX / Quality Improvement</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="w-full">
+                    <label class="block text-sm font-medium text-slate-700 mb-1">Specific Problem Statement (Crucial for AI)</label>
+                    <textarea name="problem_statement" placeholder="e.g. The VP of Ops is complaining about 'Ghost Calls' and wants to reduce mean-time-to-repair by 50% before the Q4 freeze." class="w-full border rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none h-24 text-sm"></textarea>
                 </div>
             </div>
 
             <div class="mb-8">
-                <h2 class="text-xl font-semibold mb-4 border-b pb-2">2. Strategic Driver</h2>
-                <label class="block text-sm font-medium text-gray-700 mb-2">Project Focus (Leave blank to let AI decide)</label>
-                <select name="project_type" class="w-full border rounded-lg px-4 py-2 bg-white">
-                    <option value="">-- AI Auto-Detect --</option>
-                    <option value="Migration">Migration (Legacy to Cloud)</option>
-                    <option value="DevOps">DevOps / CI/CD Transformation</option>
-                    <option value="Operations">Operational Efficiency (Cost Cutting)</option>
-                    <option value="CX">CX / Quality Improvement</option>
-                </select>
-            </div>
-
-            <div class="mb-8">
-                <h2 class="text-xl font-semibold mb-4 border-b pb-2">3. Investment Estimates</h2>
-                <p class="text-sm text-gray-500 mb-4">Enter values from the official quote. These are used for ROI calc only.</p>
+                <h2 class="text-xl font-semibold mb-4 border-b pb-2 text-slate-800">2. Investment Estimates</h2>
+                <p class="text-sm text-slate-500 mb-4">Values from the official quote (used for ROI calc).</p>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Total One-Time Cost ($)</label>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Total One-Time Cost ($)</label>
                         <input type="number" name="one_time_cost" placeholder="e.g. 25000" class="w-full border rounded-lg px-4 py-2 focus:ring-2 focus:ring-green-500 outline-none">
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Total Annual Recurring ($)</label>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Total Annual Recurring ($)</label>
                         <input type="number" name="recurring_cost" placeholder="e.g. 75000" class="w-full border rounded-lg px-4 py-2 focus:ring-2 focus:ring-green-500 outline-none">
                     </div>
                 </div>
             </div>
 
             <div class="mb-8">
-                <h2 class="text-xl font-semibold mb-4 border-b pb-2">4. Solution Stack</h2>
+                <h2 class="text-xl font-semibold mb-4 border-b pb-2 text-slate-800">3. Solution Stack</h2>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {% for product in products %}
                     <label class="checkbox-card cursor-pointer">
                         <input type="checkbox" name="products" value="{{ product }}" class="hidden">
-                        <div class="border rounded-lg p-4 hover:border-blue-300 transition-all">
-                            <span class="font-medium">{{ product }}</span>
+                        <div class="border border-slate-200 rounded-lg p-4 hover:border-blue-400 transition-all bg-slate-50">
+                            <span class="font-medium text-slate-900">{{ product }}</span>
                         </div>
                     </label>
                     {% endfor %}
@@ -83,8 +108,11 @@
             </div>
 
             <div class="text-center mt-8">
-                <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-lg shadow-lg transform transition hover:-translate-y-1">
-                    Generate Report
+                <button id="submitBtn" type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-lg shadow-lg transform transition hover:-translate-y-1 w-full md:w-auto">
+                    Generate Strategic Report
+                </button>
+                <button id="loadingBtn" type="button" class="hidden bg-blue-400 text-white font-bold py-3 px-8 rounded-lg w-full md:w-auto cursor-not-allowed flex items-center justify-center gap-2">
+                    <div class="spinner"></div> Generating Analysis...
                 </button>
             </div>
 
