@@ -27,11 +27,10 @@ COLOR_TEXT = (51, 65, 85)       # Slate 700
 COLOR_LIGHT = (241, 245, 249)   # Slate 100
 FONT_FAMILY = 'Helvetica'
 
-# --- TEXT SANITIZER (THE FIX) ---
+# --- TEXT SANITIZER ---
 def sanitize_text(text):
     """
     Replaces incompatible Unicode characters with Latin-1 safe equivalents.
-    Fixes the FPDFUnicodeEncodingException.
     """
     if not isinstance(text, str):
         return str(text)
@@ -51,7 +50,6 @@ def sanitize_text(text):
     for char, replacement in replacements.items():
         text = text.replace(char, replacement)
         
-    # Final safety net: encode to latin-1, replacing errors with '?'
     return text.encode('latin-1', 'replace').decode('latin-1')
 
 # --- AI ENGINE ---
@@ -92,7 +90,6 @@ def generate_tailored_content(client_name, industry, project_type, context_text,
     
     *** CRITICAL INPUT - SPECIFIC CLIENT PAIN POINT ***:
     "{problem_statement}"
-    (Ensure your output directly addresses this pain point wherever possible).
 
     CLIENT NEWS/CONTEXT:
     {context_text}
@@ -223,7 +220,7 @@ def generate_pdf():
     if user_code != ACCESS_CODE:
         return "Invalid Access Code", 403
 
-    # 1. Inputs (WITH SANITIZATION)
+    # 1. Inputs
     client_name = sanitize_text(request.form.get('client_name'))
     client_url = request.form.get('client_url')
     industry = sanitize_text(request.form.get('industry'))
@@ -240,7 +237,7 @@ def generate_pdf():
 
     # 2. AI Intelligence Layer
     tavily_raw = get_tavily_context(client_name, client_url, industry)
-    tavily_context = sanitize_text(tavily_raw) # Sanitize the API response
+    tavily_context = sanitize_text(tavily_raw)
     
     ai_product_content = generate_tailored_content(client_name, industry, project_type, tavily_context, problem_statement, selected_products)
 
@@ -282,7 +279,6 @@ def generate_pdf():
     pdf.add_page()
     pdf.chapter_title("1. Strategic Context & Risks")
     
-    # Problem Statement
     pdf.set_fill_color(254, 242, 242)
     pdf.rect(10, pdf.get_y(), 190, 20, 'F')
     pdf.set_xy(15, pdf.get_y() + 5)
@@ -297,7 +293,6 @@ def generate_pdf():
     pdf.section_text(f"Our research into {client_name}'s current environment and the broader {industry} landscape highlights several key drivers:")
     pdf.ln(5)
     
-    # Tavily Context
     pdf.set_fill_color(*COLOR_LIGHT)
     pdf.set_font('Helvetica', 'I', 10)
     pdf.set_text_color(*COLOR_TEXT)
@@ -320,15 +315,23 @@ def generate_pdf():
             pdf.ln(2)
             pdf.set_font('Helvetica', 'I', 10)
             pdf.set_text_color(80, 80, 80)
-            pdf.multi_cell(0, 5, sanitize_text(content['impact'])) # Sanitize AI output
+            pdf.multi_cell(0, 5, sanitize_text(content['impact']))
             pdf.ln(3)
             
             pdf.set_font('Helvetica', '', 10)
             pdf.set_text_color(*COLOR_TEXT)
+            
+            # --- FIXED BULLET SECTION ---
             for bullet in content['bullets']:
-                pdf.cell(5)
+                # Save cursor position
+                current_y = pdf.get_y()
+                # Indent 5mm
+                pdf.set_x(15) 
+                # Print Bullet
                 pdf.cell(5, 5, "+", ln=0)
-                pdf.multi_cell(0, 5, sanitize_text(bullet)) # Sanitize AI output
+                # Print Text with EXPLICIT WIDTH (170mm) to prevent overflow error
+                pdf.multi_cell(170, 5, sanitize_text(bullet))
+            # ---------------------------
             pdf.ln(5)
 
     # PAGE 4: INVESTMENT
