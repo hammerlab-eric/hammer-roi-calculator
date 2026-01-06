@@ -1,6 +1,8 @@
-openai
+openai>=1.0.0
 fpdf
 python-dotenv
 langchain==0.1.0
-langchain-openai
+langchain-community==0.0.10
+langchain-core==0.1.10
+langchain-openai==0.0.5
 tavily-python
