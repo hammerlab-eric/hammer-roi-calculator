@@ -102,21 +102,18 @@ def agent_triage_doctor(client_name, problem_statement, product_name, beta_mode=
     if beta_mode:
         return {"selected_key": "BETA_PREVIEW", "prompt": prompt}
 
-    # 4. Call Gemini Flash (Fast & Cheap)
-    result = run_gemini_agent("Triage Doctor", "gemini-1.5-flash", prompt)
+    # 4. Call Gemini Flash (Using specific version -001)
+    result = run_gemini_agent("Triage Doctor", "gemini-1.5-flash-001", prompt)
     if result and "selected_key" in result:
-        # Validate the key actually exists in the menu
         if result["selected_key"] in menu:
             return result["selected_key"]
     
-    # Fallback: Return the first key in the menu if AI fails or picks invalid key
     return list(menu.keys())[0] if menu else "default"
 
 def agent_cfo_analyst(client_name, industry, product_name, selected_key, context_text, beta_mode=False):
     """
     Agent 3: Constructs the math based on the specific archetype selected.
     """
-    # 1. Get the specific logic definition
     archetype_data = ROI_ARCHETYPES.get(product_name, {}).get(selected_key, {})
     
     prompt = f"""
@@ -149,39 +146,32 @@ def agent_cfo_analyst(client_name, industry, product_name, selected_key, context
     """
     
     if beta_mode:
-        return prompt # Return the prompt string for preview
+        return prompt 
     
-    # Call Gemini Pro (Smart Reasoning)
-    return run_gemini_agent("CFO Analyst", "gemini-1.5-pro", prompt)
+    # Call Gemini Pro (Using specific version -001)
+    return run_gemini_agent("CFO Analyst", "gemini-1.5-pro-001", prompt)
 
 
 def generate_tailored_content(client_name, industry, project_type, context_text, problem_statement, selected_products, mode='live'):
-    """
-    The 3-Agent Chain Orchestrator
-    """
     results = {}
     is_beta = (mode == 'beta')
     
     for prod in selected_products:
-        # 1. Agent 1: Triage (Selects the Strategy Key)
         triage_result = agent_triage_doctor(client_name, problem_statement, prod, beta_mode=is_beta)
         
         if is_beta:
-            # In Beta, triage_result is a dict with the prompt
             selected_key = "BETA_PREVIEW"
             triage_prompt_preview = triage_result['prompt']
         else:
             selected_key = triage_result
         
-        # 2. Agent 3: CFO (Uses the key from Agent 1)
         cfo_result = agent_cfo_analyst(client_name, industry, prod, selected_key, context_text, beta_mode=is_beta)
         
         if is_beta:
-             # In Beta, cfo_result is just the prompt string
              fallback = PRODUCT_DATA.get(prod, {}).get('math_variables', {})
              preview_text = (
-                 f"--- [AGENT 1: TRIAGE (Flash)] ---\n{triage_prompt_preview}\n\n"
-                 f"--- [AGENT 3: CFO (Pro)] ---\n{cfo_result}"
+                 f"--- [AGENT 1: TRIAGE (Flash-001)] ---\n{triage_prompt_preview}\n\n"
+                 f"--- [AGENT 3: CFO (Pro-001)] ---\n{cfo_result}"
              )
              results[prod] = {
                  "impact": preview_text,
@@ -189,11 +179,9 @@ def generate_tailored_content(client_name, industry, project_type, context_text,
                  "math_variables": fallback
              }
         else:
-             # In Live, cfo_result is the JSON
              if cfo_result:
                  results[prod] = cfo_result
              else:
-                 # Fallback if Gemini fails
                  results[prod] = PRODUCT_DATA.get(prod, {})
 
     return results
@@ -271,7 +259,6 @@ class ProReportPDF(FPDF):
         
         col_1, col_2, y_base = 60, 100, self.get_y() + 2
         
-        # Benchmark
         self.set_font(FONT_FAMILY, 'B', 9)
         self.set_text_color(100, 100, 100)
         self.set_xy(15, y_base)
@@ -280,7 +267,6 @@ class ProReportPDF(FPDF):
         self.set_text_color(0, 0, 0)
         self.cell(col_2, 5, f"${math_data.get('cost_per_unit_value', 0):,.2f} per {sanitize_text(math_data.get('metric_unit', 'Unit'))}", ln=1)
         
-        # Status Quo
         self.set_xy(15, y_base + 6)
         self.set_font(FONT_FAMILY, 'B', 9)
         self.set_text_color(185, 28, 28)
@@ -290,7 +276,6 @@ class ProReportPDF(FPDF):
         val_before = math_data.get('cost_per_unit_value', 0) * math_data.get('before_qty', 0)
         self.cell(col_2, 5, f"{math_data.get('before_qty', 0)} units = ${val_before:,.0f}/yr Risk", ln=1)
         
-        # Solution
         self.set_xy(15, y_base + 12)
         self.set_font(FONT_FAMILY, 'B', 9)
         self.set_text_color(22, 163, 74)
@@ -300,7 +285,6 @@ class ProReportPDF(FPDF):
         val_after = math_data.get('cost_per_unit_value', 0) * math_data.get('after_qty', 0)
         self.cell(col_2, 5, f"{math_data.get('after_qty', 0)} units = ${val_after:,.0f}/yr Risk", ln=1)
         
-        # Summary
         self.set_xy(130, y_base + 10)
         self.set_font(FONT_FAMILY, 'B', 12)
         self.set_text_color(*COLOR_ACCENT)
