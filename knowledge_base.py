@@ -118,84 +118,103 @@ PRODUCT_DATA = {
     }
 }
 
-# 2. AGENT "MENU" (The Brain Logic)
-# These map specific user problems to the correct math model.
+# 2. AGENT MENU (The Brain Logic)
 ROI_ARCHETYPES = {
     "Hammer VoiceWatch": {
         "outage_avoidance": {
             "title": "Cost of Downtime (Revenue Protection)",
             "logic": "Detects outages early -> Reduces Downtime Minutes -> Saves Revenue.",
-            [cite_start]"source_doc": "VoiceWatch ROI: 'Cost of Downtime Avoided' & 'Revenue Protection' [cite: 236]"
+            "source_doc": "VoiceWatch ROI"
         },
-        "labor_savings": {
-            "title": "Operational Efficiency (Manual Testing)",
-            "logic": "Automates manual TFN sweeps -> Reduces FTE Hours -> Saves Labor Cost.",
-            [cite_start]"source_doc": "VoiceWatch ROI: 'Testing Efficiency (Labor Savings)' [cite: 243]"
+        "labor_efficiency": {
+            "title": "Testing Efficiency (Labor Savings)",
+            "logic": "Automates TFN sweeps -> Eliminates manual dialing -> Frees up FTEs.",
+            "source_doc": "VoiceWatch ROI"
         },
         "mttr_reduction": {
             "title": "Mean Time to Repair (MTTR)",
             "logic": "Pinpoints root cause (Carrier vs Internal) -> Faster Fixes -> Lower Support Costs.",
-            [cite_start]"source_doc": "VoiceWatch ROI: 'Mean Time to Repair' [cite: 246]"
+            "source_doc": "VoiceWatch ROI"
         }
     },
     "Hammer QA": {
         "defect_escape": {
             "title": "Defect Escape Ratio (Risk)",
-            "logic": "Catches bugs in Dev -> Prevents Prod Defects -> Avoids Emergency Fix Costs.",
-            [cite_start]"source_doc": "Hammer QA: 'Defect Escape Ratio' [cite: 93]"
+            "logic": "Catches Sev-1 defects in Dev -> Prevents Production bugs -> Avoids Emergency Fix Costs.",
+            "source_doc": "Hammer QA"
         },
         "regression_speed": {
             "title": "Regression Testing Velocity",
             "logic": "Parallel execution -> Reduces Cycle Time -> Increases Release Velocity.",
-            [cite_start]"source_doc": "Hammer QA: 'Accelerated Scenarios' [cite: 125]"
+            "source_doc": "Hammer QA"
         }
     },
     "Hammer VoiceExplorer": {
         "migration_speed": {
             "title": "Migration De-Risking (Discovery)",
-            "logic": "Automated discovery -> Prevents 'Discovery Phase' delays -> Faster Cloud Migration.",
-            [cite_start]"source_doc": "VoiceExplorer: 'Migration Readiness' [cite: 147]"
+            "logic": "Automated discovery of legacy IVR -> Prevents discovery delays -> Shortens migration timeline.",
+            "source_doc": "VoiceExplorer"
+        },
+        "script_dev_savings": {
+            "title": "Test Automation Development",
+            "logic": "Auto-generates scripts from discovery -> Reduces coding effort by 80% -> Faster QA setup.",
+            "source_doc": "VoiceExplorer"
         },
         "doc_labor": {
             "title": "Documentation Labor Savings",
             "logic": "Automated mapping -> Replaces manual Visio/Excel work -> Saves Engineer Hours.",
-            [cite_start]"source_doc": "VoiceExplorer: 'Documentation Effort Reduction' [cite: 184]"
+            "source_doc": "VoiceExplorer"
         }
     },
     "Hammer Performance": {
-        "outage_risk": {
+        "revenue_risk": {
             "title": "Peak Traffic Stability",
-            "logic": "Stress tests pre-go-live -> Prevents crashes -> Avoids Revenue Loss.",
-            [cite_start]"source_doc": "Hammer Performance: 'Downtime Cost Avoidance' [cite: 90]"
+            "logic": "Stress tests pre-go-live -> Prevents crashes during peaks -> Avoids Revenue Loss.",
+            "source_doc": "Hammer Performance"
         },
-        "troubleshooting": {
+        "change_fail_rate": {
+            "title": "Change Success Rate",
+            "logic": "Validates patches/upgrades -> Reduces Rollback Rate -> Saves Rework Labor.",
+            "source_doc": "Hammer Performance"
+        },
+        "troubleshooting_labor": {
             "title": "War Room Avoidance",
-            "logic": "Proactive testing -> Fewer P1 Incidents -> Less Overtime/All-Hands calls.",
-            [cite_start]"source_doc": "Hammer Performance: 'Labor Savings (Troubleshooting)' [cite: 100]"
+            "logic": "Proactive testing -> Fewer P1 Incidents -> Less All-Hands troubleshooting overtime.",
+            "source_doc": "Hammer Performance"
         }
     },
     "Ativa Enterprise": {
-        "sla_credits": {
-            "title": "Vendor Accountability (SLA Recovery)",
+        "sla_recovery": {
+            "title": "Vendor Accountability (SLA Credits)",
             "logic": "Monitors Carrier SLAs -> Proves violations -> Recovers Cash Credits.",
-            [cite_start]"source_doc": "Ativa ROI: 'SLA Credit Recovery' [cite: 286]"
+            "source_doc": "Ativa ROI"
         },
-        "mttr_innocence": {
+        "capex_optimization": {
+            "title": "SBC/Trunk Optimization",
+            "logic": "Predictive capacity management -> Right-sizes contracts -> Avoids over-provisioning spend.",
+            "source_doc": "Ativa ROI"
+        },
+        "mtti_reduction": {
             "title": "Mean Time to Innocence",
-            "logic": "Isolates Network vs App faults -> Stops Finger-pointing -> Saves Eng. Hours.",
-            [cite_start]"source_doc": "Ativa ROI: 'Mean Time to Innocence' [cite: 297]"
+            "logic": "Isolates Network vs App faults -> Stops Finger-pointing -> Saves Senior Eng. Hours.",
+            "source_doc": "Ativa ROI"
         }
     },
     "Hammer Edge": {
         "hardware_refresh": {
             "title": "Hardware Refresh Optimization",
             "logic": "Identifies actual PC health -> Prevents blanket PC replacements -> Saves CAPEX.",
-            [cite_start]"source_doc": "Hammer Edge: 'Hardware Refresh Optimization' [cite: 33]"
+            "source_doc": "Hammer Edge"
         },
         "ticket_deflection": {
             "title": "Tier 1 Ticket Deflection",
             "logic": "Self-healing/diagnosis -> Resolves WiFi issues at L1 -> Avoids L2/L3 escalation.",
-            [cite_start]"source_doc": "Hammer Edge: 'Tier 1 Ticket Deflection' [cite: 37]"
+            "source_doc": "Hammer Edge"
+        },
+        "agent_productivity": {
+            "title": "Remote Agent Productivity",
+            "logic": "Correlates connectivity to uptime -> Reduces Shrinkage -> Recovers billable hours.",
+            "source_doc": "Hammer Edge"
         }
     }
 }
