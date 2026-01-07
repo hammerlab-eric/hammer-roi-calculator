@@ -29,9 +29,26 @@ if GOOGLE_API_KEY:
 
 # --- UTILS ---
 def sanitize_text(text):
+    """ Aggressively clean text for PDF compatibility (Latin-1 Only) """
     if not isinstance(text, str): return str(text)
-    replacements = {'\u2013': '-', '\u2014': '--', '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"', '\u2026': '...', '\u00a0': ' ', '\u2022': '*'}
-    for char, rep in replacements.items(): text = text.replace(char, rep)
+    
+    # Map common Unicode characters to safe ASCII equivalents
+    replacements = {
+        '\u2013': '-',   # En dash
+        '\u2014': '--',  # Em dash
+        '\u2018': "'",   # Left single quote
+        '\u2019': "'",   # Right single quote
+        '\u201c': '"',   # Left double quote
+        '\u201d': '"',   # Right double quote
+        '\u2022': '+',   # Bullet
+        '\u2026': '...', # Ellipsis
+        '\u00a0': ' ',   # Non-breaking space
+        '•': '+',        # Direct bullet match
+    }
+    for char, rep in replacements.items(): 
+        text = text.replace(char, rep)
+    
+    # Final safety net: Encode to Latin-1, replacing unknown chars with '?'
     return text.encode('latin-1', 'replace').decode('latin-1')
 
 def format_currency(value):
@@ -167,8 +184,7 @@ def calculate_roi(product_data, user_costs):
 # --- PDF GENERATOR (RE-ENGINEERED) ---
 class ProReportPDF(FPDF):
     def header(self):
-        # Professional Header with Gradient-like effect
-        self.set_fill_color(15, 23, 42) # Navy
+        self.set_fill_color(15, 23, 42)
         self.rect(0, 0, 210, 25, 'F')
         self.set_y(8)
         self.set_font('Helvetica', 'B', 14)
@@ -195,17 +211,15 @@ class ProReportPDF(FPDF):
             self.set_text_color(100, 116, 139)
             self.cell(0, 6, sanitize_text(subtitle), ln=True)
         
-        # Decorative Line
-        self.set_draw_color(37, 99, 235) # Blue Accent
+        self.set_draw_color(37, 99, 235)
         self.set_line_width(0.8)
         self.line(10, self.get_y()+4, 200, self.get_y()+4)
         self.ln(12)
 
     def draw_math_table(self, math, save, inv):
-        # Background Box
         start_y = self.get_y()
-        self.set_fill_color(248, 250, 252) # Light Gray/Blue
-        self.rect(10, start_y, 190, 50, 'F') # Taller box for breathing room
+        self.set_fill_color(248, 250, 252)
+        self.rect(10, start_y, 190, 50, 'F')
         
         self.set_xy(15, start_y + 5)
         self.set_font('Helvetica', 'B', 11)
@@ -213,13 +227,10 @@ class ProReportPDF(FPDF):
         scenario = sanitize_text(math.get('scenario_title', 'ROI Analysis'))
         self.cell(0, 6, f"Scenario: {scenario}", ln=True)
         
-        # Columns setup
         y_base = self.get_y() + 5
-        col1_x = 15
-        col2_x = 70  # Widened column 1
-        col3_x = 130 # Added specific column for values
+        col1_x, col2_x, col3_x = 15, 70, 130
         
-        # 1. Benchmark Row
+        # Benchmark
         self.set_xy(col1_x, y_base)
         self.set_font('Helvetica', 'B', 9); self.set_text_color(100,100,100)
         self.cell(50, 6, "Industry Benchmark:", ln=0)
@@ -230,10 +241,10 @@ class ProReportPDF(FPDF):
         unit_name = sanitize_text(math.get('metric_unit', 'Unit'))
         self.cell(100, 6, f"{format_currency(unit_cost)} per {unit_name}", ln=1)
         
-        # 2. Before Row (Status Quo)
+        # Before
         y_next = self.get_y() + 2
         self.set_xy(col1_x, y_next)
-        self.set_font('Helvetica', 'B', 9); self.set_text_color(185, 28, 28) # Red label
+        self.set_font('Helvetica', 'B', 9); self.set_text_color(185, 28, 28)
         self.cell(50, 6, sanitize_text(math.get('before_label', 'Before')), ln=0)
         
         self.set_xy(col2_x, y_next)
@@ -246,10 +257,10 @@ class ProReportPDF(FPDF):
         self.set_font('Helvetica', 'B', 9)
         self.cell(50, 6, f"= {format_currency(val_before)} Risk", ln=1)
         
-        # 3. After Row (Solution)
+        # After
         y_next = self.get_y() + 2
         self.set_xy(col1_x, y_next)
-        self.set_font('Helvetica', 'B', 9); self.set_text_color(22, 163, 74) # Green label
+        self.set_font('Helvetica', 'B', 9); self.set_text_color(22, 163, 74)
         self.cell(50, 6, sanitize_text(math.get('after_label', 'After')), ln=0)
         
         self.set_xy(col2_x, y_next)
@@ -262,76 +273,64 @@ class ProReportPDF(FPDF):
         self.set_font('Helvetica', 'B', 9)
         self.cell(50, 6, f"= {format_currency(val_after)} Cost", ln=1)
         
-        # 4. Net Savings Logic
+        # Net
         y_summary = start_y + 35
         self.set_xy(140, y_summary)
-        
         is_positive = save > 0
-        color = (22, 163, 74) if is_positive else (185, 28, 28) # Green or Red
+        color = (22, 163, 74) if is_positive else (185, 28, 28)
         self.set_text_color(*color)
         self.set_font('Helvetica', 'B', 14)
         label = "Net Savings" if is_positive else "Net Cost"
         self.cell(60, 8, f"{label}: {format_currency(save)}", align='R', ln=1)
-        
-        self.ln(10) # Padding after table
+        self.ln(10)
 
     def card_box(self, label, value, subtext, x, y, w, h):
         self.set_xy(x, y)
         self.set_fill_color(255, 255, 255)
-        self.set_draw_color(226, 232, 240) # Slate-200
+        self.set_draw_color(226, 232, 240)
         self.set_line_width(0.5)
         self.rect(x, y, w, h, 'DF')
         
-        # Value (Center, Large)
         self.set_xy(x, y + 6)
         self.set_font('Helvetica', 'B', 14)
         
-        # Color logic for ROI/Savings
         if "ROI" in label or "SAVINGS" in label:
-             # Check if value is negative (contains parenthesis or -)
              if "(" in value or "-" in value:
-                 self.set_text_color(185, 28, 28) # Red
+                 self.set_text_color(185, 28, 28)
              else:
-                 self.set_text_color(22, 163, 74) # Green
+                 self.set_text_color(22, 163, 74)
         else:
-            self.set_text_color(15, 23, 42) # Navy
+            self.set_text_color(15, 23, 42)
 
         self.cell(w, 8, sanitize_text(value), align='C', ln=1)
         
-        # Label (Center, Small, Uppercase)
         self.set_xy(x, y + 16)
         self.set_font('Helvetica', 'B', 8)
-        self.set_text_color(100, 116, 139) # Slate-500
+        self.set_text_color(100, 116, 139)
         self.cell(w, 5, sanitize_text(label), align='C', ln=1)
         
-        # Subtext (Bottom, Tiny)
         self.set_xy(x, y + 21)
         self.set_font('Helvetica', 'I', 7)
-        self.set_text_color(148, 163, 184) # Slate-400
+        self.set_text_color(148, 163, 184)
         self.cell(w, 4, sanitize_text(subtext), align='C')
 
 def create_chart(inv, save):
     with plot_lock:
         plt.style.use('seaborn-v0_8-whitegrid')
-        fig, ax = plt.subplots(figsize=(8, 4)) # Wider chart
+        fig, ax = plt.subplots(figsize=(8, 4))
         
         months = list(range(13))
         start = -1 * abs(inv)
         monthly = (save / 12) if save != 0 else 0
         flow = [start + (monthly * m) for m in months]
         
-        # Plot Line
         ax.plot(months, flow, color='#2563EB', linewidth=3, marker='o', markersize=6)
-        
-        # Breakeven Line
         ax.axhline(0, color='#64748B', linestyle='--', linewidth=1.5)
         
-        # Formatting
         ax.set_title("Cumulative Cash Flow (Year 1)", fontsize=12, fontweight='bold', pad=15)
         ax.set_xlabel("Months", fontsize=9)
         ax.set_ylabel("Net Cash Position ($)", fontsize=9)
         
-        # Currency formatting for Y-axis
         fmt = '${x:,.0f}'
         tick = mtick.StrMethodFormatter(fmt)
         ax.yaxis.set_major_formatter(tick)
@@ -339,7 +338,7 @@ def create_chart(inv, save):
         plt.tight_layout()
         
         buf = io.BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight', dpi=200) # Higher DPI
+        plt.savefig(buf, format='png', bbox_inches='tight', dpi=200)
         plt.close()
         buf.seek(0)
         return buf
@@ -375,7 +374,6 @@ def generate_pdf():
     pdf = ProReportPDF()
     pdf.set_auto_page_break(True, 15)
     
-    # --- PAGE 1: EXECUTIVE SUMMARY ---
     pdf.add_page()
     pdf.ln(5)
     pdf.set_font('Helvetica', 'B', 24)
@@ -386,7 +384,6 @@ def generate_pdf():
     pdf.cell(0, 8, f"Prepared for: {client}", ln=True)
     pdf.ln(10)
     
-    # Problem Statement Box
     pdf.set_fill_color(241, 245, 249)
     pdf.rect(10, pdf.get_y(), 190, 25, 'F')
     pdf.set_xy(15, pdf.get_y()+5)
@@ -395,7 +392,6 @@ def generate_pdf():
     pdf.multi_cell(180, 5, f"Focus: {prob}")
     pdf.ln(10)
     
-    # Scorecards
     y = pdf.get_y()
     w, h = 60, 28
     pdf.card_box("PROJECTED SAVINGS", format_currency(tot_save), "Total Value Created", 10, y, w, h)
@@ -404,12 +400,10 @@ def generate_pdf():
     roi_pct = ((tot_save-tot_inv)/tot_inv)*100 if tot_inv > 0 else 0
     pdf.card_box("ROI %", f"{roi_pct:.0f}%", "Return on Investment", 140, y, w, h)
     
-    # Chart
     pdf.set_y(y + h + 20)
     chart = create_chart(tot_inv, tot_save)
     pdf.image(chart, x=10, w=190)
     
-    # --- PRODUCT PAGES ---
     for p in prods:
         if p not in ai_data: continue
         d = ai_data[p]
@@ -418,23 +412,21 @@ def generate_pdf():
         pdf.add_page()
         pdf.chapter_title(f"Analysis: {p}")
         
-        # Strategic Impact
         pdf.set_font('Helvetica', 'I', 11)
         pdf.set_text_color(51, 65, 85)
         pdf.multi_cell(0, 6, sanitize_text(d.get('impact', '')))
         pdf.ln(8)
         
-        # Bullets
         pdf.set_font('Helvetica', '', 10)
         pdf.set_text_color(15, 23, 42)
         for b in d.get('bullets', []):
             pdf.set_x(15)
-            pdf.cell(5, 6, "•", ln=0)
+            # Replaced Bullet Point "•" with "+" to prevent crashes
+            pdf.cell(5, 6, "+", ln=0)
             pdf.multi_cell(170, 6, sanitize_text(b))
             pdf.ln(2)
         pdf.ln(5)
         
-        # Math Table
         if 'math_variables' in d:
              pdf.draw_math_table(d['math_variables'], calc['savings'], calc['investment'])
     
