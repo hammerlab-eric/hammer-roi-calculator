@@ -11,7 +11,6 @@ from tavily import TavilyClient
 import google.generativeai as genai
 from knowledge_base import PRODUCT_DATA, PRODUCT_MANUALS
 
-# Concurrency-safe plotting
 import matplotlib
 matplotlib.use('Agg')
 import threading
@@ -29,50 +28,28 @@ if GOOGLE_API_KEY:
 
 # --- UTILS ---
 def sanitize_text(text):
-    """ Aggressively clean text for PDF compatibility (Latin-1 Only) """
     if not isinstance(text, str): return str(text)
-    
-    # Map common Unicode characters to safe ASCII equivalents
-    replacements = {
-        '\u2013': '-',   # En dash
-        '\u2014': '--',  # Em dash
-        '\u2018': "'",   # Left single quote
-        '\u2019': "'",   # Right single quote
-        '\u201c': '"',   # Left double quote
-        '\u201d': '"',   # Right double quote
-        '\u2022': '+',   # Bullet
-        '\u2026': '...', # Ellipsis
-        '\u00a0': ' ',   # Non-breaking space
-        '•': '+',        # Direct bullet match
-    }
-    for char, rep in replacements.items(): 
-        text = text.replace(char, rep)
-    
-    # Final safety net: Encode to Latin-1, replacing unknown chars with '?'
+    replacements = {'\u2013': '-', '\u2014': '--', '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"', '\u2026': '...', '\u00a0': ' ', '\u2022': '+', '•': '+', '$': ''} 
+    for char, rep in replacements.items(): text = text.replace(char, rep)
     return text.encode('latin-1', 'replace').decode('latin-1')
 
 def format_currency(value):
-    """ Return $1,234 or ($1,234) for negative """
     try:
         val = float(value)
-        if val < 0:
-            return f"(${abs(val):,.0f})"
+        if val < 0: return f"(${abs(val):,.0f})"
         return f"${val:,.0f}"
-    except:
-        return "$0"
+    except: return "$0"
 
 def get_tavily_context(client_name, client_url, industry):
-    """ Agent 2 (Parallel): The Researcher """
     if not TAVILY_API_KEY: return f"Standard {industry} challenges apply."
     try:
         tavily = TavilyClient(api_key=TAVILY_API_KEY)
         query = f"Strategic priorities and financial challenges for {client_name} ({client_url}) in {industry} 2025?"
         response = tavily.search(query=query, search_depth="basic", max_results=2)
         return "\n".join([f"- {r['content'][:200]}..." for r in response['results']])
-    except:
-        return "Standard industry context."
+    except: return "Standard industry context."
 
-# --- GEMINI AGENT ENGINE ---
+# --- GEMINI AGENT ---
 def run_gemini_agent(agent_role, model_name, prompt, beta_mode=False):
     if beta_mode: return None
     try:
@@ -109,27 +86,39 @@ def process_single_product(prod, client_name, industry, problem_statement, conte
     triage_result = run_gemini_agent("Triage Doctor", "gemini-2.5-flash", triage_prompt)
     scenario = triage_result.get("selected_scenario_name", "Standard ROI") if triage_result else "Standard ROI"
 
-    # Step 2: CFO
+    # Step 2: CFO (With Sanity Check Logic)
     cfo_prompt = f"""
     CLIENT: {client_name} ({industry})
     PRODUCT: {prod}
     SCENARIO: {scenario}
     CONTEXT: {context_text}
     MANUAL SNIPPET: {manual_snippet}
-    TASK: Using the logic in the Manual for '{scenario}', generate a financial table.
+    
+    TASK: Generate a financial ROI table.
+    
+    CRITICAL RULES FOR MATH:
+    1. "cost_per_unit_value" is the COST OF THE PROBLEM (e.g., Manual Labor Rate, Cost of Downtime).
+    2. Automation must REDUCE the quantity of the problem (e.g. Hours Spent).
+    3. DO NOT calculate the cost of the software. Focus on the BUSINESS VALUE SAVED.
+    4. Example:
+       - Cost per Unit: $50 (Labor Rate)
+       - Before Qty: 1000 hours (Manual) -> Cost = $50,000
+       - After Qty: 50 hours (Automated) -> Cost = $2,500
+       - SAVINGS = $47,500.
+    
     Output JSON: 
     {{
        "impact": "2-sentence impact statement.",
        "bullets": ["Bullet 1", "Bullet 2", "Bullet 3"],
        "math_variables": {{
            "scenario_title": "{scenario}",
-           "metric_unit": "Unit (e.g. Hours/Year)",
-           "cost_per_unit_label": "Label (e.g. Avg Cost)",
-           "cost_per_unit_value": (Number),
-           "before_label": "Current State",
-           "before_qty": (Number),
-           "after_label": "Future State",
-           "after_qty": (Number)
+           "metric_unit": "Unit (e.g. Labor Hours, Downtime Minutes)",
+           "cost_per_unit_label": "Cost Basis (e.g. Hourly Rate)",
+           "cost_per_unit_value": (Number - Cost per unit),
+           "before_label": "Current State (High Volume)",
+           "before_qty": (Number - High),
+           "after_label": "Future State (Low Volume)",
+           "after_qty": (Number - Low)
        }}
     }}
     """
@@ -174,6 +163,7 @@ def calculate_roi(product_data, user_costs):
         before = float(math.get('before_qty', 0))
         after = float(math.get('after_qty', 0))
         
+        # Savings = (Rate * Old_Hours) - (Rate * New_Hours)
         save = (unit * before - unit * after) * term_years
         total_save += save
         
@@ -181,7 +171,7 @@ def calculate_roi(product_data, user_costs):
         
     return results, total_inv, total_save
 
-# --- PDF GENERATOR (RE-ENGINEERED) ---
+# --- PDF GENERATOR (FIXED LAYOUT) ---
 class ProReportPDF(FPDF):
     def header(self):
         self.set_fill_color(15, 23, 42)
@@ -193,7 +183,7 @@ class ProReportPDF(FPDF):
         self.cell(0, 10, 'STRATEGIC VALUE ANALYSIS', ln=0)
         self.set_font('Helvetica', '', 10)
         self.set_text_color(200, 200, 200)
-        self.cell(0, 10, 'CONFIDENTIAL PREVIEW', ln=1, align='R')
+        self.cell(0, 10, 'CONFIDENTIAL', ln=1, align='R')
         self.ln(15)
     
     def footer(self):
@@ -202,15 +192,10 @@ class ProReportPDF(FPDF):
         self.set_text_color(128, 128, 128)
         self.cell(0, 10, f'Page {self.page_no()}', align='C')
 
-    def chapter_title(self, title, subtitle=None):
+    def chapter_title(self, title):
         self.set_font('Helvetica', 'B', 16)
         self.set_text_color(15, 23, 42)
         self.cell(0, 8, sanitize_text(title), ln=True)
-        if subtitle:
-            self.set_font('Helvetica', 'I', 11)
-            self.set_text_color(100, 116, 139)
-            self.cell(0, 6, sanitize_text(subtitle), ln=True)
-        
         self.set_draw_color(37, 99, 235)
         self.set_line_width(0.8)
         self.line(10, self.get_y()+4, 200, self.get_y()+4)
@@ -219,7 +204,7 @@ class ProReportPDF(FPDF):
     def draw_math_table(self, math, save, inv):
         start_y = self.get_y()
         self.set_fill_color(248, 250, 252)
-        self.rect(10, start_y, 190, 50, 'F')
+        self.rect(10, start_y, 190, 55, 'F') # Increased height for safety
         
         self.set_xy(15, start_y + 5)
         self.set_font('Helvetica', 'B', 11)
@@ -227,62 +212,66 @@ class ProReportPDF(FPDF):
         scenario = sanitize_text(math.get('scenario_title', 'ROI Analysis'))
         self.cell(0, 6, f"Scenario: {scenario}", ln=True)
         
-        y_base = self.get_y() + 5
-        col1_x, col2_x, col3_x = 15, 70, 130
+        y_base = self.get_y() + 6
+        # Defined column X positions
+        col1_x = 15   # Labels (Benchmark, Before, After)
+        col2_x = 60   # Values (e.g. $50/hr)
+        col3_x = 140  # Totals (e.g. = $50,000)
         
-        # Benchmark
+        # 1. Benchmark Row
         self.set_xy(col1_x, y_base)
         self.set_font('Helvetica', 'B', 9); self.set_text_color(100,100,100)
-        self.cell(50, 6, "Industry Benchmark:", ln=0)
+        self.cell(45, 6, "Benchmark:", ln=0)
         
         self.set_xy(col2_x, y_base)
         self.set_font('Helvetica', '', 9); self.set_text_color(15, 23, 42)
         unit_cost = math.get('cost_per_unit_value', 0)
         unit_name = sanitize_text(math.get('metric_unit', 'Unit'))
-        self.cell(100, 6, f"{format_currency(unit_cost)} per {unit_name}", ln=1)
+        self.cell(80, 6, f"{format_currency(unit_cost)} per {unit_name}", ln=0)
         
-        # Before
-        y_next = self.get_y() + 2
+        # 2. Before Row
+        y_next = y_base + 8 # Add spacing
         self.set_xy(col1_x, y_next)
         self.set_font('Helvetica', 'B', 9); self.set_text_color(185, 28, 28)
-        self.cell(50, 6, sanitize_text(math.get('before_label', 'Before')), ln=0)
+        self.cell(45, 6, sanitize_text(math.get('before_label', 'Before')), ln=0)
         
         self.set_xy(col2_x, y_next)
         self.set_font('Helvetica', '', 9); self.set_text_color(0,0,0)
         qty_before = math.get('before_qty', 0)
         val_before = unit_cost * qty_before
-        self.cell(60, 6, f"{qty_before:,.0f} {unit_name}s", ln=0)
+        self.cell(80, 6, f"{qty_before:,.0f} units", ln=0)
         
         self.set_xy(col3_x, y_next)
         self.set_font('Helvetica', 'B', 9)
-        self.cell(50, 6, f"= {format_currency(val_before)} Risk", ln=1)
+        self.cell(50, 6, f"= {format_currency(val_before)} Risk", ln=0)
         
-        # After
-        y_next = self.get_y() + 2
+        # 3. After Row
+        y_next += 8 # Add spacing
         self.set_xy(col1_x, y_next)
         self.set_font('Helvetica', 'B', 9); self.set_text_color(22, 163, 74)
-        self.cell(50, 6, sanitize_text(math.get('after_label', 'After')), ln=0)
+        self.cell(45, 6, sanitize_text(math.get('after_label', 'After')), ln=0)
         
         self.set_xy(col2_x, y_next)
         self.set_font('Helvetica', '', 9); self.set_text_color(0,0,0)
         qty_after = math.get('after_qty', 0)
         val_after = unit_cost * qty_after
-        self.cell(60, 6, f"{qty_after:,.0f} {unit_name}s", ln=0)
+        self.cell(80, 6, f"{qty_after:,.0f} units", ln=0)
         
         self.set_xy(col3_x, y_next)
         self.set_font('Helvetica', 'B', 9)
-        self.cell(50, 6, f"= {format_currency(val_after)} Cost", ln=1)
+        self.cell(50, 6, f"= {format_currency(val_after)} Risk", ln=0)
         
-        # Net
-        y_summary = start_y + 35
-        self.set_xy(140, y_summary)
+        # 4. Net Savings
+        y_summary = start_y + 40
+        self.set_xy(120, y_summary)
         is_positive = save > 0
         color = (22, 163, 74) if is_positive else (185, 28, 28)
         self.set_text_color(*color)
         self.set_font('Helvetica', 'B', 14)
-        label = "Net Savings" if is_positive else "Net Cost"
-        self.cell(60, 8, f"{label}: {format_currency(save)}", align='R', ln=1)
-        self.ln(10)
+        label = "Net Benefit" if is_positive else "Net Cost"
+        self.cell(80, 8, f"{label}: {format_currency(save)}", align='R', ln=1)
+        
+        self.ln(15)
 
     def card_box(self, label, value, subtext, x, y, w, h):
         self.set_xy(x, y)
@@ -421,7 +410,6 @@ def generate_pdf():
         pdf.set_text_color(15, 23, 42)
         for b in d.get('bullets', []):
             pdf.set_x(15)
-            # Replaced Bullet Point "•" with "+" to prevent crashes
             pdf.cell(5, 6, "+", ln=0)
             pdf.multi_cell(170, 6, sanitize_text(b))
             pdf.ln(2)
