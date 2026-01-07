@@ -11,7 +11,6 @@ from tavily import TavilyClient
 import google.generativeai as genai
 from knowledge_base import PRODUCT_DATA, PRODUCT_MANUALS
 
-# Concurrency-safe plotting
 import matplotlib
 matplotlib.use('Agg')
 import threading
@@ -35,7 +34,6 @@ def sanitize_text(text):
     return text.encode('latin-1', 'replace').decode('latin-1')
 
 def get_tavily_context(client_name, client_url, industry):
-    """ Agent 2 (Parallel): The Researcher """
     if not TAVILY_API_KEY: return f"Standard {industry} challenges apply."
     try:
         tavily = TavilyClient(api_key=TAVILY_API_KEY)
@@ -45,16 +43,14 @@ def get_tavily_context(client_name, client_url, industry):
     except:
         return "Standard industry context."
 
-# --- GEMINI AGENT ENGINE ---
+# --- GEMINI ENGINE ---
 def run_gemini_agent(agent_role, model_name, prompt, beta_mode=False):
     if beta_mode: return None
-    
     try:
         model = genai.GenerativeModel(
             model_name,
             system_instruction=f"You are a specialized agent: {agent_role}. Return strictly valid JSON."
         )
-        # 60s timeout per call. 
         response = model.generate_content(
             prompt, 
             generation_config={"response_mime_type": "application/json"},
@@ -65,45 +61,34 @@ def run_gemini_agent(agent_role, model_name, prompt, beta_mode=False):
         print(f"ERROR: {model_name} failed: {e}")
         return None
 
-# --- WORKER FUNCTIONS (PER PRODUCT) ---
-
+# --- WORKER FUNCTION ---
 def process_single_product(prod, client_name, industry, problem_statement, context_text, beta_mode):
-    """
-    The Full Chain for ONE product. 
-    """
     if beta_mode:
-        return prod, {
-            "impact": "BETA MODE PREVIEW", 
-            "bullets": ["Parallel Processing Active", "No API Cost"], 
-            "math_variables": {"scenario_title": "BETA", "cost_per_unit_value":0}
-        }
+        return prod, {"impact": "BETA PREVIEW", "bullets": ["Beta"], "math_variables": {"scenario_title": "Beta", "cost_per_unit_value":0}}
 
     full_manual = PRODUCT_MANUALS.get(prod, "No manual found.")
+    
+    # OPTIMIZATION: Reduced context to 15k chars to prevent timeouts
+    manual_snippet = full_manual[:15000]
 
-    # --- STEP 1: TRIAGE (Flash) ---
-    # Using 2.5 Flash as verified by user
+    # Step 1: Triage
     triage_prompt = f"""
     CLIENT: {client_name}
     PROBLEM: "{problem_statement}"
-    MANUAL: {full_manual[:30000]} 
-    
+    MANUAL: {manual_snippet} 
     TASK: Select the ONE 'ROI Metric' or 'Usage Scenario' that best solves the User Problem.
     Output JSON ONLY: {{ "selected_scenario_name": "Name of scenario", "reasoning": "Why it fits" }}
     """
-    
     triage_result = run_gemini_agent("Triage Doctor", "gemini-2.5-flash", triage_prompt)
-    
     scenario = triage_result.get("selected_scenario_name", "Standard ROI") if triage_result else "Standard ROI"
 
-    # --- STEP 2: CFO (Pro) ---
-    # Using 2.5 Pro as verified by user
+    # Step 2: CFO
     cfo_prompt = f"""
     CLIENT: {client_name} ({industry})
     PRODUCT: {prod}
     SCENARIO: {scenario}
     CONTEXT: {context_text}
-    MANUAL SNIPPET: {full_manual[:20000]}
-    
+    MANUAL SNIPPET: {manual_snippet}
     TASK: Using the logic in the Manual for '{scenario}', generate a financial table.
     Output JSON: 
     {{
@@ -121,41 +106,26 @@ def process_single_product(prod, client_name, industry, problem_statement, conte
        }}
     }}
     """
-
     cfo_result = run_gemini_agent("CFO Analyst", "gemini-2.5-pro", cfo_prompt)
-    
-    # Return result or empty dict if failed
     return prod, (cfo_result if cfo_result else PRODUCT_DATA.get(prod, {}))
-
 
 def generate_tailored_content(client_name, industry, project_type, context_text, problem_statement, selected_products, mode='live'):
     results = {}
     is_beta = (mode == 'beta')
     
-    # --- PARALLEL EXECUTION START ---
-    # Max workers = 6 (one per product)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+    # OPTIMIZATION: Max 3 workers to prevent CPU choking on small instances
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
         future_to_prod = {
-            executor.submit(
-                process_single_product, 
-                prod, 
-                client_name, 
-                industry, 
-                problem_statement, 
-                context_text, 
-                is_beta
-            ): prod for prod in selected_products
+            executor.submit(process_single_product, prod, client_name, industry, problem_statement, context_text, is_beta): prod 
+            for prod in selected_products
         }
-        
         for future in concurrent.futures.as_completed(future_to_prod):
             prod = future_to_prod[future]
             try:
                 p_name, data = future.result()
                 results[p_name] = data
-            except Exception as exc:
-                print(f"Product {prod} generated an exception: {exc}")
+            except Exception:
                 results[prod] = PRODUCT_DATA.get(prod, {}) 
-    # --- PARALLEL EXECUTION END ---
 
     return results
 
@@ -261,14 +231,12 @@ def index():
 def generate_pdf():
     if request.form.get('access_code') != ACCESS_CODE: return "Invalid Code", 403
     
-    # Inputs
     mode = request.form.get('mode', 'live')
     client = sanitize_text(request.form.get('client_name'))
     ind = sanitize_text(request.form.get('industry'))
     prob = sanitize_text(request.form.get('problem_statement'))
     prods = request.form.getlist('products')
     
-    # Costs
     costs = {}
     for p in prods:
         try:
@@ -278,12 +246,10 @@ def generate_pdf():
             costs[p] = {'cost': c, 'term': t}
         except: costs[p] = {'cost': 0, 'term': 12}
         
-    # Execution
     tavily = get_tavily_context(client, request.form.get('client_url'), ind)
     ai_data = generate_tailored_content(client, ind, "", tavily, prob, prods, mode)
     roi, tot_inv, tot_save = calculate_roi(ai_data, costs)
     
-    # PDF
     pdf = ProReportPDF()
     pdf.set_auto_page_break(True, 15); pdf.add_page()
     pdf.ln(5); pdf.set_font('Helvetica', 'B', 20); pdf.set_text_color(15, 23, 42)
