@@ -9,7 +9,10 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
 from tavily import TavilyClient
 import google.generativeai as genai
+
+# Import Data & Logic
 from knowledge_base import PRODUCT_DATA, PRODUCT_MANUALS
+import benchmarks 
 
 import matplotlib
 matplotlib.use('Agg')
@@ -41,13 +44,28 @@ def format_currency(value):
     except: return "$0"
 
 def get_tavily_context(client_name, client_url, industry):
-    if not TAVILY_API_KEY: return f"Standard {industry} challenges apply."
+    """ 
+    Returns a dict with 'context_text' and 'revenue_est' if found, 
+    so we can determine business size intelligently.
+    """
+    default_resp = {"context": f"Standard {industry} challenges.", "revenue": None}
+    
+    if not TAVILY_API_KEY: return default_resp
+    
     try:
         tavily = TavilyClient(api_key=TAVILY_API_KEY)
-        query = f"Strategic priorities and financial challenges for {client_name} ({client_url}) in {industry} 2025?"
+        # We ask for revenue specifically in the query now
+        query = f"Financial revenue 2024/2025 and strategic priorities for {client_name} ({client_url}) in {industry}?"
         response = tavily.search(query=query, search_depth="basic", max_results=2)
-        return "\n".join([f"- {r['content'][:200]}..." for r in response['results']])
-    except: return "Standard industry context."
+        
+        # Combine snippets
+        text = "\n".join([f"- {r['content'][:200]}..." for r in response['results']])
+        
+        # Simple extraction attempt (This is a simplified approach, usually we'd use regex or AI)
+        # For now, we pass the text context and let the main flow handle sizing via benchmarks logic if explicit revenue isn't parsed.
+        return {"context": text, "revenue": None} 
+    except:
+        return default_resp
 
 # --- GEMINI AGENT ---
 def run_gemini_agent(agent_role, model_name, prompt, beta_mode=False):
@@ -68,14 +86,18 @@ def run_gemini_agent(agent_role, model_name, prompt, beta_mode=False):
         return None
 
 # --- WORKER FUNCTION ---
-def process_single_product(prod, client_name, industry, problem_statement, context_text, beta_mode):
+def process_single_product(prod, client_name, industry, problem_statement, context_data, beta_mode):
     if beta_mode:
         return prod, {"impact": "BETA PREVIEW", "bullets": ["Beta"], "math_variables": {"scenario_title": "Beta", "cost_per_unit_value":0}}
 
+    # 1. Get Benchmarks for this specific client
+    #    We pass None for revenue for now (defaults to Medium), or we could parse it from context_data if we added logic.
+    profile_data, size_label, industry_key = benchmarks.get_benchmark_profile(industry, None)
+    
     full_manual = PRODUCT_MANUALS.get(prod, "No manual found.")
     manual_snippet = full_manual[:15000]
 
-    # Step 1: Triage
+    # Step 2: Triage
     triage_prompt = f"""
     CLIENT: {client_name}
     PROBLEM: "{problem_statement}"
@@ -86,25 +108,23 @@ def process_single_product(prod, client_name, industry, problem_statement, conte
     triage_result = run_gemini_agent("Triage Doctor", "gemini-2.5-flash", triage_prompt)
     scenario = triage_result.get("selected_scenario_name", "Standard ROI") if triage_result else "Standard ROI"
 
-    # Step 2: CFO (With Sanity Check Logic)
+    # Step 3: CFO (Injected with Benchmarks)
     cfo_prompt = f"""
-    CLIENT: {client_name} ({industry})
+    CLIENT: {client_name} ({industry_key} - {size_label} Business)
     PRODUCT: {prod}
     SCENARIO: {scenario}
-    CONTEXT: {context_text}
+    CONTEXT: {context_data['context']}
     MANUAL SNIPPET: {manual_snippet}
+    
+    BENCHMARK DATA (Use these as Truth Source):
+    {json.dumps(profile_data, indent=2)}
     
     TASK: Generate a financial ROI table.
     
-    CRITICAL RULES FOR MATH:
-    1. "cost_per_unit_value" is the COST OF THE PROBLEM (e.g., Manual Labor Rate, Cost of Downtime).
-    2. Automation must REDUCE the quantity of the problem (e.g. Hours Spent).
-    3. DO NOT calculate the cost of the software. Focus on the BUSINESS VALUE SAVED.
-    4. Example:
-       - Cost per Unit: $50 (Labor Rate)
-       - Before Qty: 1000 hours (Manual) -> Cost = $50,000
-       - After Qty: 50 hours (Automated) -> Cost = $2,500
-       - SAVINGS = $47,500.
+    CRITICAL RULES:
+    1. Use the "BENCHMARK DATA" above for costs (e.g. agent_hourly_rate, cost_of_downtime).
+    2. Automation must REDUCE the quantity (e.g. Hours, Incidents).
+    3. DO NOT hallucinate costs. Use the provided benchmarks.
     
     Output JSON: 
     {{
@@ -112,26 +132,26 @@ def process_single_product(prod, client_name, industry, problem_statement, conte
        "bullets": ["Bullet 1", "Bullet 2", "Bullet 3"],
        "math_variables": {{
            "scenario_title": "{scenario}",
-           "metric_unit": "Unit (e.g. Labor Hours, Downtime Minutes)",
-           "cost_per_unit_label": "Cost Basis (e.g. Hourly Rate)",
-           "cost_per_unit_value": (Number - Cost per unit),
-           "before_label": "Current State (High Volume)",
-           "before_qty": (Number - High),
-           "after_label": "Future State (Low Volume)",
-           "after_qty": (Number - Low)
+           "metric_unit": "Unit (e.g. Hours, Incidents)",
+           "cost_per_unit_label": "Rate Label (e.g. Hourly Cost)",
+           "cost_per_unit_value": (Number from Benchmarks),
+           "before_label": "Current State",
+           "before_qty": (Number),
+           "after_label": "Future State",
+           "after_qty": (Number)
        }}
     }}
     """
     cfo_result = run_gemini_agent("CFO Analyst", "gemini-2.5-pro", cfo_prompt)
     return prod, (cfo_result if cfo_result else PRODUCT_DATA.get(prod, {}))
 
-def generate_tailored_content(client_name, industry, project_type, context_text, problem_statement, selected_products, mode='live'):
+def generate_tailored_content(client_name, industry, project_type, context_data, problem_statement, selected_products, mode='live'):
     results = {}
     is_beta = (mode == 'beta')
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
         future_to_prod = {
-            executor.submit(process_single_product, prod, client_name, industry, problem_statement, context_text, is_beta): prod 
+            executor.submit(process_single_product, prod, client_name, industry, problem_statement, context_data, is_beta): prod 
             for prod in selected_products
         }
         for future in concurrent.futures.as_completed(future_to_prod):
@@ -153,25 +173,29 @@ def calculate_roi(product_data, user_costs):
         math = data.get('math_variables')
         if not math: continue
         
-        cost = user_costs.get(prod, {}).get('cost', 0)
-        term = user_costs.get(prod, {}).get('term', 12)
-        inv = cost * term
-        total_inv += inv
+        cost_info = user_costs.get(prod, {'cost': 0, 'term': 12})
+        investment = cost_info['cost'] * cost_info['term']
+        total_inv += investment
         
-        term_years = term / 12.0
+        # Savings Calculation
+        # Annualized Savings = (Rate * Old_Qty) - (Rate * New_Qty)
+        # Then multiplied by Term (in years)
+        
         unit = float(math.get('cost_per_unit_value', 0))
         before = float(math.get('before_qty', 0))
         after = float(math.get('after_qty', 0))
         
-        # Savings = (Rate * Old_Hours) - (Rate * New_Hours)
-        save = (unit * before - unit * after) * term_years
-        total_save += save
+        annual_savings = (unit * before) - (unit * after)
+        term_years = cost_info['term'] / 12.0
         
-        results[prod] = {"investment": inv, "savings": save, "math": math}
+        total_term_savings = annual_savings * term_years
+        total_save += total_term_savings
+        
+        results[prod] = {"investment": investment, "savings": total_term_savings, "math": math}
         
     return results, total_inv, total_save
 
-# --- PDF GENERATOR (FIXED LAYOUT) ---
+# --- PDF GENERATOR ---
 class ProReportPDF(FPDF):
     def header(self):
         self.set_fill_color(15, 23, 42)
@@ -183,7 +207,7 @@ class ProReportPDF(FPDF):
         self.cell(0, 10, 'STRATEGIC VALUE ANALYSIS', ln=0)
         self.set_font('Helvetica', '', 10)
         self.set_text_color(200, 200, 200)
-        self.cell(0, 10, 'CONFIDENTIAL', ln=1, align='R')
+        self.cell(0, 10, 'CONFIDENTIAL PREVIEW', ln=1, align='R')
         self.ln(15)
     
     def footer(self):
@@ -201,77 +225,77 @@ class ProReportPDF(FPDF):
         self.line(10, self.get_y()+4, 200, self.get_y()+4)
         self.ln(12)
 
-    def draw_math_table(self, math, save, inv):
-        start_y = self.get_y()
-        self.set_fill_color(248, 250, 252)
-        self.rect(10, start_y, 190, 55, 'F') # Increased height for safety
+    def smart_row(self, c1_text, c2_text, c3_text, c1_color=(0,0,0), c3_color=(0,0,0)):
+        x_start = 15
+        col_widths = [95, 30, 50] 
+        y_start = self.get_y()
         
-        self.set_xy(15, start_y + 5)
-        self.set_font('Helvetica', 'B', 11)
+        self.set_xy(x_start, y_start)
+        self.set_font('Helvetica', 'B', 10)
+        self.set_text_color(*c1_color)
+        self.multi_cell(col_widths[0], 6, sanitize_text(c1_text), align='L')
+        y_end_1 = self.get_y()
+        
+        self.set_xy(x_start + col_widths[0], y_start)
+        self.set_font('Helvetica', '', 10)
+        self.set_text_color(0, 0, 0)
+        self.multi_cell(col_widths[1], 6, sanitize_text(c2_text), align='C')
+        y_end_2 = self.get_y()
+        
+        self.set_xy(x_start + col_widths[0] + col_widths[1], y_start)
+        self.set_font('Helvetica', 'B', 10)
+        self.set_text_color(*c3_color)
+        self.multi_cell(col_widths[2], 6, sanitize_text(c3_text), align='R')
+        y_end_3 = self.get_y()
+        
+        self.set_y(max(y_end_1, y_end_2, y_end_3) + 4)
+
+    def draw_math_table(self, math, save, inv):
+        self.set_font('Helvetica', 'B', 12)
         self.set_text_color(15, 23, 42)
         scenario = sanitize_text(math.get('scenario_title', 'ROI Analysis'))
-        self.cell(0, 6, f"Scenario: {scenario}", ln=True)
+        self.cell(0, 8, f"Scenario: {scenario}", ln=True)
+        self.ln(2)
         
-        y_base = self.get_y() + 6
-        # Defined column X positions
-        col1_x = 15   # Labels (Benchmark, Before, After)
-        col2_x = 60   # Values (e.g. $50/hr)
-        col3_x = 140  # Totals (e.g. = $50,000)
-        
-        # 1. Benchmark Row
-        self.set_xy(col1_x, y_base)
-        self.set_font('Helvetica', 'B', 9); self.set_text_color(100,100,100)
-        self.cell(45, 6, "Benchmark:", ln=0)
-        
-        self.set_xy(col2_x, y_base)
-        self.set_font('Helvetica', '', 9); self.set_text_color(15, 23, 42)
+        self.set_font('Helvetica', 'I', 9)
+        self.set_text_color(100, 100, 100)
         unit_cost = math.get('cost_per_unit_value', 0)
         unit_name = sanitize_text(math.get('metric_unit', 'Unit'))
-        self.cell(80, 6, f"{format_currency(unit_cost)} per {unit_name}", ln=0)
+        self.cell(0, 6, f"Benchmark: {format_currency(unit_cost)} per {unit_name}", ln=True)
+        self.ln(4)
         
-        # 2. Before Row
-        y_next = y_base + 8 # Add spacing
-        self.set_xy(col1_x, y_next)
-        self.set_font('Helvetica', 'B', 9); self.set_text_color(185, 28, 28)
-        self.cell(45, 6, sanitize_text(math.get('before_label', 'Before')), ln=0)
-        
-        self.set_xy(col2_x, y_next)
-        self.set_font('Helvetica', '', 9); self.set_text_color(0,0,0)
         qty_before = math.get('before_qty', 0)
         val_before = unit_cost * qty_before
-        self.cell(80, 6, f"{qty_before:,.0f} units", ln=0)
+        self.smart_row(
+            c1_text=math.get('before_label', 'Before'),
+            c2_text=f"{qty_before:,.0f}",
+            c3_text=f"= {format_currency(val_before)} Risk",
+            c1_color=(185, 28, 28)
+        )
         
-        self.set_xy(col3_x, y_next)
-        self.set_font('Helvetica', 'B', 9)
-        self.cell(50, 6, f"= {format_currency(val_before)} Risk", ln=0)
-        
-        # 3. After Row
-        y_next += 8 # Add spacing
-        self.set_xy(col1_x, y_next)
-        self.set_font('Helvetica', 'B', 9); self.set_text_color(22, 163, 74)
-        self.cell(45, 6, sanitize_text(math.get('after_label', 'After')), ln=0)
-        
-        self.set_xy(col2_x, y_next)
-        self.set_font('Helvetica', '', 9); self.set_text_color(0,0,0)
         qty_after = math.get('after_qty', 0)
         val_after = unit_cost * qty_after
-        self.cell(80, 6, f"{qty_after:,.0f} units", ln=0)
+        self.smart_row(
+            c1_text=math.get('after_label', 'After'),
+            c2_text=f"{qty_after:,.0f}",
+            c3_text=f"= {format_currency(val_after)} Risk",
+            c1_color=(22, 163, 74)
+        )
         
-        self.set_xy(col3_x, y_next)
-        self.set_font('Helvetica', 'B', 9)
-        self.cell(50, 6, f"= {format_currency(val_after)} Risk", ln=0)
+        self.ln(2)
+        self.set_draw_color(200, 200, 200)
+        self.line(120, self.get_y(), 200, self.get_y())
+        self.ln(2)
         
-        # 4. Net Savings
-        y_summary = start_y + 40
-        self.set_xy(120, y_summary)
         is_positive = save > 0
         color = (22, 163, 74) if is_positive else (185, 28, 28)
         self.set_text_color(*color)
         self.set_font('Helvetica', 'B', 14)
         label = "Net Benefit" if is_positive else "Net Cost"
-        self.cell(80, 8, f"{label}: {format_currency(save)}", align='R', ln=1)
         
-        self.ln(15)
+        self.set_x(120)
+        self.cell(80, 10, f"{label}: {format_currency(save)}", align='R', ln=1)
+        self.ln(10)
 
     def card_box(self, label, value, subtext, x, y, w, h):
         self.set_xy(x, y)
@@ -356,8 +380,8 @@ def generate_pdf():
             costs[p] = {'cost': c, 'term': t}
         except: costs[p] = {'cost': 0, 'term': 12}
         
-    tavily = get_tavily_context(client, request.form.get('client_url'), ind)
-    ai_data = generate_tailored_content(client, ind, "", tavily, prob, prods, mode)
+    tavily_data = get_tavily_context(client, request.form.get('client_url'), ind)
+    ai_data = generate_tailored_content(client, ind, "", tavily_data, prob, prods, mode)
     roi, tot_inv, tot_save = calculate_roi(ai_data, costs)
     
     pdf = ProReportPDF()
