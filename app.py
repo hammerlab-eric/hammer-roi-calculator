@@ -29,72 +29,104 @@ if GOOGLE_API_KEY:
 # --- UTILS ---
 def sanitize_text(text):
     if not isinstance(text, str): return str(text)
-    # Basic Latin-1 sanitization
     replacements = {'\u2013': '-', '\u2014': '--', '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"', '\u2026': '...', '\u00a0': ' ', '\u2022': '*'}
     for char, rep in replacements.items(): text = text.replace(char, rep)
     return text.encode('latin-1', 'replace').decode('latin-1')
 
 def get_tavily_context(client_name, client_url, industry):
-    """ Fetch industry context. Fail fast if API hangs. """
+    """ Agent 2 (Parallel): The Researcher """
     if not TAVILY_API_KEY: return f"Standard {industry} challenges apply."
     try:
         tavily = TavilyClient(api_key=TAVILY_API_KEY)
         query = f"Strategic priorities and financial challenges for {client_name} ({client_url}) in {industry} 2025?"
-        # Reduced max_results to 2 to speed up blocking call
         response = tavily.search(query=query, search_depth="basic", max_results=2)
         return "\n".join([f"- {r['content'][:200]}..." for r in response['results']])
     except:
         return "Standard industry context."
 
-# --- GEMINI AGENTS (UNIFIED) ---
-def run_gemini_agent(agent_role, model_name, prompt, beta_mode=False):
+# --- GEMINI AGENT ENGINE ---
+def run_gemini_agent(agent_role, primary_model, fallback_model, prompt, beta_mode=False):
+    """
+    Tries the Primary Model (e.g. 2.5). If 404/Error, falls back to Stable (e.g. 1.5).
+    """
     if beta_mode: return None
-    try:
+    
+    def try_generate(model_name):
         model = genai.GenerativeModel(
             model_name,
-            system_instruction=f"You are a specialized agent: {agent_role}. Return valid JSON."
+            system_instruction=f"You are a specialized agent: {agent_role}. Return strictly valid JSON."
         )
-        # Added request_options with timeout to prevent infinite hanging
         response = model.generate_content(
             prompt, 
             generation_config={"response_mime_type": "application/json"},
-            request_options={"timeout": 60} 
+            request_options={"timeout": 90} # 90s timeout per agent
         )
         return json.loads(response.text)
+
+    # Attempt 1: Primary (2.5)
+    try:
+        return try_generate(primary_model)
     except Exception as e:
-        print(f"Gemini Error ({agent_role}): {e}")
+        print(f"Gemini {primary_model} failed ({e}). Falling back to {fallback_model}...")
+        
+    # Attempt 2: Fallback (1.5)
+    try:
+        return try_generate(fallback_model)
+    except Exception as e:
+        print(f"Gemini Fallback {fallback_model} failed: {e}")
         return None
 
-def agent_integrated_analysis(client_name, industry, product_name, context_text, problem_statement, beta_mode=False):
-    """ 
-    MERGED AGENT: Performs Triage (Selection) AND CFO Analysis (Math) in ONE call.
-    Reduces latency by ~50%.
+# --- AGENT 1: TRIAGE (Flash) ---
+# Low Cost, High Speed, Massive Context
+def agent_triage_doctor(client_name, problem_statement, product_name, beta_mode=False):
+    full_manual = PRODUCT_MANUALS.get(product_name, "No manual found.")
+    
+    prompt = f"""
+    CLIENT: {client_name}
+    PROBLEM: "{problem_statement}"
+    
+    MANUAL: 
+    {full_manual[:30000]} 
+    
+    TASK: 
+    1. Read the Manual. 
+    2. Select the ONE 'ROI Metric' or 'Usage Scenario' that best solves the User Problem.
+    
+    Output JSON ONLY: {{ "selected_scenario_name": "Name of scenario", "reasoning": "Why it fits" }}
     """
-    # Slice manual to 25k chars to prevent context overload/latency while keeping core content
+    
+    if beta_mode: return {"selected_scenario_name": "BETA_PREVIEW", "prompt": prompt}
+
+    # Primary: 2.5 Flash | Fallback: 1.5 Flash
+    result = run_gemini_agent("Triage Doctor", "gemini-2.5-flash", "gemini-1.5-flash", prompt)
+    
+    return result if result else {"selected_scenario_name": "Standard ROI", "reasoning": "Default"}
+
+# --- AGENT 2: CFO (Pro) ---
+# High Intelligence, Reasoning, Math
+def agent_cfo_analyst(client_name, industry, product_name, triage_result, context_text, beta_mode=False):
     full_manual = PRODUCT_MANUALS.get(product_name, "")
-    manual_text = full_manual[:25000] 
+    scenario = triage_result.get("selected_scenario_name", "Standard ROI")
     
     prompt = f"""
     CLIENT: {client_name} ({industry})
-    PROBLEM: "{problem_statement}"
+    PRODUCT: {product_name}
+    SCENARIO: {scenario}
     CONTEXT: {context_text}
     
-    PRODUCT MANUAL (Snippet):
-    {manual_text}
+    MANUAL SNIPPET (Relevant Logic):
+    {full_manual[:20000]}
     
-    TASK:
-    1. Analyze the Manual. Select the ONE 'ROI Metric' or 'Usage Scenario' that best solves the User Problem.
-    2. Using that scenario, generate a Financial Table with realistic estimates for {industry}.
+    TASK: Using the logic in the Manual for '{scenario}', generate a financial table.
     
-    Output JSON ONLY:
+    Output JSON: 
     {{
-       "selected_scenario": "Name of scenario selected",
-       "impact": "2-sentence strategic impact statement.",
-       "bullets": ["Hard Savings Bullet 1", "Hard Savings Bullet 2", "Hard Savings Bullet 3"],
+       "impact": "2-sentence impact statement.",
+       "bullets": ["Bullet 1", "Bullet 2", "Bullet 3"],
        "math_variables": {{
-           "scenario_title": "Title of Calculation",
-           "metric_unit": "e.g. Hours/Year",
-           "cost_per_unit_label": "e.g. Avg Hourly Cost",
+           "scenario_title": "{scenario}",
+           "metric_unit": "Unit (e.g. Hours/Year)",
+           "cost_per_unit_label": "Label (e.g. Avg Cost)",
            "cost_per_unit_value": (Number),
            "before_label": "Current State",
            "before_qty": (Number),
@@ -103,30 +135,32 @@ def agent_integrated_analysis(client_name, industry, product_name, context_text,
        }}
     }}
     """
+    if beta_mode: return prompt
     
-    if beta_mode: return {"prompt": prompt}
-    
-    # Use Pro-001 for the combined reasoning task
-    return run_gemini_agent("Solutions Architect", "gemini-1.5-pro-001", prompt)
+    # Primary: 2.5 Pro | Fallback: 1.5 Pro
+    return run_gemini_agent("CFO Analyst", "gemini-2.5-pro", "gemini-1.5-pro", prompt)
 
 def generate_tailored_content(client_name, industry, project_type, context_text, problem_statement, selected_products, mode='live'):
     results = {}
     is_beta = (mode == 'beta')
     
     for prod in selected_products:
-        # SINGLE CALL per product instead of two
-        analysis = agent_integrated_analysis(client_name, industry, prod, context_text, problem_statement, beta_mode=is_beta)
+        # Step 1: Triage (Flash)
+        triage = agent_triage_doctor(client_name, problem_statement, prod, beta_mode=is_beta)
         
         if is_beta:
-            preview = f"--- UNIFIED PROMPT (Merged Triage+CFO) ---\n{analysis['prompt']}"
+            preview = f"--- AGENT 1 (FLASH) ---\n{triage['prompt']}\n\n--- AGENT 2 (PRO) ---\n(Dependent on Agent 1 output)"
             results[prod] = {
                 "impact": preview, 
                 "bullets": ["BETA MODE"], 
                 "math_variables": {"scenario_title": "BETA", "cost_per_unit_value":0}
             }
         else:
-            if analysis:
-                results[prod] = analysis
+            # Step 2: CFO (Pro)
+            cfo = agent_cfo_analyst(client_name, industry, prod, triage, context_text)
+            
+            if cfo:
+                results[prod] = cfo
             else:
                 results[prod] = PRODUCT_DATA.get(prod, {})
 
@@ -141,7 +175,6 @@ def calculate_roi(product_data, user_costs):
         math = data.get('math_variables')
         if not math: continue
         
-        # Safe casting
         cost = user_costs.get(prod, {}).get('cost', 0)
         term = user_costs.get(prod, {}).get('term', 12)
         inv = cost * term
@@ -210,7 +243,6 @@ class ProReportPDF(FPDF):
         self.cell(w, 5, sanitize_text(subtext), align='C')
 
 def create_chart(inv, save):
-    # Use lock to prevent thread collision in matplotlib
     with plot_lock:
         plt.style.use('seaborn-v0_8-whitegrid')
         fig, ax = plt.subplots(figsize=(7, 3.5))
@@ -243,7 +275,7 @@ def generate_pdf():
     prob = sanitize_text(request.form.get('problem_statement'))
     prods = request.form.getlist('products')
     
-    # Costs parsing
+    # Costs
     costs = {}
     for p in prods:
         try:
@@ -253,12 +285,12 @@ def generate_pdf():
             costs[p] = {'cost': c, 'term': t}
         except: costs[p] = {'cost': 0, 'term': 12}
         
-    # Execution (Blocking Work)
+    # Execution
     tavily = get_tavily_context(client, request.form.get('client_url'), ind)
     ai_data = generate_tailored_content(client, ind, "", tavily, prob, prods, mode)
     roi, tot_inv, tot_save = calculate_roi(ai_data, costs)
     
-    # PDF Construction (In Memory)
+    # PDF
     pdf = ProReportPDF()
     pdf.set_auto_page_break(True, 15); pdf.add_page()
     pdf.ln(5); pdf.set_font('Helvetica', 'B', 20); pdf.set_text_color(15, 23, 42)
@@ -286,13 +318,10 @@ def generate_pdf():
         pdf.ln(10)
         if 'math_variables' in d: pdf.draw_math_table(d['math_variables'], calc['savings'], calc['investment'])
     
-    # Return Byte Stream (No disk write)
-    # FPDF's output() returns a str in latin-1 (in older versions) or bytearray (in newer). 
-    # Safest cross-version way: output to string, encode to latin-1
     try:
         pdf_out = pdf.output(dest='S').encode('latin-1') 
     except:
-        pdf_out = bytes(pdf.output()) # Fallback for newer FPDF2
+        pdf_out = bytes(pdf.output()) 
 
     return send_file(
         io.BytesIO(pdf_out),
