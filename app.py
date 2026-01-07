@@ -2,6 +2,7 @@ import os
 import io
 import json
 import logging
+import concurrent.futures
 from flask import Flask, render_template, request, send_file
 from fpdf import FPDF
 import matplotlib.pyplot as plt
@@ -45,80 +46,65 @@ def get_tavily_context(client_name, client_url, industry):
         return "Standard industry context."
 
 # --- GEMINI AGENT ENGINE ---
-def run_gemini_agent(agent_role, primary_model, fallback_model, prompt, beta_mode=False):
-    """
-    Tries the Primary Model (e.g. 2.5). If 404/Error, falls back to Stable (e.g. 1.5).
-    """
+def run_gemini_agent(agent_role, model_name, prompt, beta_mode=False):
     if beta_mode: return None
     
-    def try_generate(model_name):
+    try:
         model = genai.GenerativeModel(
             model_name,
             system_instruction=f"You are a specialized agent: {agent_role}. Return strictly valid JSON."
         )
+        # 60s timeout per call. 
         response = model.generate_content(
             prompt, 
             generation_config={"response_mime_type": "application/json"},
-            request_options={"timeout": 90} # 90s timeout per agent
+            request_options={"timeout": 60} 
         )
         return json.loads(response.text)
-
-    # Attempt 1: Primary (2.5)
-    try:
-        return try_generate(primary_model)
     except Exception as e:
-        print(f"Gemini {primary_model} failed ({e}). Falling back to {fallback_model}...")
-        
-    # Attempt 2: Fallback (1.5)
-    try:
-        return try_generate(fallback_model)
-    except Exception as e:
-        print(f"Gemini Fallback {fallback_model} failed: {e}")
+        print(f"ERROR: {model_name} failed: {e}")
         return None
 
-# --- AGENT 1: TRIAGE (Flash) ---
-# Low Cost, High Speed, Massive Context
-def agent_triage_doctor(client_name, problem_statement, product_name, beta_mode=False):
-    full_manual = PRODUCT_MANUALS.get(product_name, "No manual found.")
-    
-    prompt = f"""
+# --- WORKER FUNCTIONS (PER PRODUCT) ---
+
+def process_single_product(prod, client_name, industry, problem_statement, context_text, beta_mode):
+    """
+    The Full Chain for ONE product. 
+    """
+    if beta_mode:
+        return prod, {
+            "impact": "BETA MODE PREVIEW", 
+            "bullets": ["Parallel Processing Active", "No API Cost"], 
+            "math_variables": {"scenario_title": "BETA", "cost_per_unit_value":0}
+        }
+
+    full_manual = PRODUCT_MANUALS.get(prod, "No manual found.")
+
+    # --- STEP 1: TRIAGE (Flash) ---
+    # Using 2.5 Flash as verified by user
+    triage_prompt = f"""
     CLIENT: {client_name}
     PROBLEM: "{problem_statement}"
+    MANUAL: {full_manual[:30000]} 
     
-    MANUAL: 
-    {full_manual[:30000]} 
-    
-    TASK: 
-    1. Read the Manual. 
-    2. Select the ONE 'ROI Metric' or 'Usage Scenario' that best solves the User Problem.
-    
+    TASK: Select the ONE 'ROI Metric' or 'Usage Scenario' that best solves the User Problem.
     Output JSON ONLY: {{ "selected_scenario_name": "Name of scenario", "reasoning": "Why it fits" }}
     """
     
-    if beta_mode: return {"selected_scenario_name": "BETA_PREVIEW", "prompt": prompt}
-
-    # Primary: 2.5 Flash | Fallback: 1.5 Flash
-    result = run_gemini_agent("Triage Doctor", "gemini-2.5-flash", "gemini-1.5-flash", prompt)
+    triage_result = run_gemini_agent("Triage Doctor", "gemini-2.5-flash", triage_prompt)
     
-    return result if result else {"selected_scenario_name": "Standard ROI", "reasoning": "Default"}
+    scenario = triage_result.get("selected_scenario_name", "Standard ROI") if triage_result else "Standard ROI"
 
-# --- AGENT 2: CFO (Pro) ---
-# High Intelligence, Reasoning, Math
-def agent_cfo_analyst(client_name, industry, product_name, triage_result, context_text, beta_mode=False):
-    full_manual = PRODUCT_MANUALS.get(product_name, "")
-    scenario = triage_result.get("selected_scenario_name", "Standard ROI")
-    
-    prompt = f"""
+    # --- STEP 2: CFO (Pro) ---
+    # Using 2.5 Pro as verified by user
+    cfo_prompt = f"""
     CLIENT: {client_name} ({industry})
-    PRODUCT: {product_name}
+    PRODUCT: {prod}
     SCENARIO: {scenario}
     CONTEXT: {context_text}
-    
-    MANUAL SNIPPET (Relevant Logic):
-    {full_manual[:20000]}
+    MANUAL SNIPPET: {full_manual[:20000]}
     
     TASK: Using the logic in the Manual for '{scenario}', generate a financial table.
-    
     Output JSON: 
     {{
        "impact": "2-sentence impact statement.",
@@ -135,34 +121,41 @@ def agent_cfo_analyst(client_name, industry, product_name, triage_result, contex
        }}
     }}
     """
-    if beta_mode: return prompt
+
+    cfo_result = run_gemini_agent("CFO Analyst", "gemini-2.5-pro", cfo_prompt)
     
-    # Primary: 2.5 Pro | Fallback: 1.5 Pro
-    return run_gemini_agent("CFO Analyst", "gemini-2.5-pro", "gemini-1.5-pro", prompt)
+    # Return result or empty dict if failed
+    return prod, (cfo_result if cfo_result else PRODUCT_DATA.get(prod, {}))
+
 
 def generate_tailored_content(client_name, industry, project_type, context_text, problem_statement, selected_products, mode='live'):
     results = {}
     is_beta = (mode == 'beta')
     
-    for prod in selected_products:
-        # Step 1: Triage (Flash)
-        triage = agent_triage_doctor(client_name, problem_statement, prod, beta_mode=is_beta)
+    # --- PARALLEL EXECUTION START ---
+    # Max workers = 6 (one per product)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+        future_to_prod = {
+            executor.submit(
+                process_single_product, 
+                prod, 
+                client_name, 
+                industry, 
+                problem_statement, 
+                context_text, 
+                is_beta
+            ): prod for prod in selected_products
+        }
         
-        if is_beta:
-            preview = f"--- AGENT 1 (FLASH) ---\n{triage['prompt']}\n\n--- AGENT 2 (PRO) ---\n(Dependent on Agent 1 output)"
-            results[prod] = {
-                "impact": preview, 
-                "bullets": ["BETA MODE"], 
-                "math_variables": {"scenario_title": "BETA", "cost_per_unit_value":0}
-            }
-        else:
-            # Step 2: CFO (Pro)
-            cfo = agent_cfo_analyst(client_name, industry, prod, triage, context_text)
-            
-            if cfo:
-                results[prod] = cfo
-            else:
-                results[prod] = PRODUCT_DATA.get(prod, {})
+        for future in concurrent.futures.as_completed(future_to_prod):
+            prod = future_to_prod[future]
+            try:
+                p_name, data = future.result()
+                results[p_name] = data
+            except Exception as exc:
+                print(f"Product {prod} generated an exception: {exc}")
+                results[prod] = PRODUCT_DATA.get(prod, {}) 
+    # --- PARALLEL EXECUTION END ---
 
     return results
 
