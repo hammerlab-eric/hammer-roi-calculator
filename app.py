@@ -44,20 +44,12 @@ def format_currency(value):
     except: return "$0"
 
 def get_tavily_context(client_name, client_url, industry):
-    """ 
-    Searches for strategic context AND revenue data.
-    """
     default_resp = {"context": f"Standard {industry} challenges.", "raw_search": ""}
-    
     if not TAVILY_API_KEY: return default_resp
-    
     try:
         tavily = TavilyClient(api_key=TAVILY_API_KEY)
-        # Explicitly ask for revenue to ensure the data is in the text for the AI to find
         query = f"Annual revenue and strategic priorities for {client_name} ({client_url}) in {industry} 2024/2025?"
         response = tavily.search(query=query, search_depth="basic", max_results=3)
-        
-        # Combine snippets into one text block
         text = "\n".join([f"- {r['content'][:300]}..." for r in response['results']])
         return {"context": text, "raw_search": text} 
     except:
@@ -81,84 +73,70 @@ def run_gemini_agent(agent_role, model_name, prompt, beta_mode=False):
         print(f"ERROR: {model_name} failed: {e}")
         return None
 
-# --- NEW: REVENUE SCOUT AGENT ---
+# --- REVENUE SCOUT ---
 def extract_revenue_from_context(client_name, search_text):
-    """
-    Uses Gemini Flash to read the Tavily search results and extract a single integer for revenue.
-    """
     if not search_text: return None
-    
     prompt = f"""
-    CONTEXT:
-    {search_text}
-    
-    TASK: Identify the annual revenue for {client_name} from the context above.
-    If a range is given, use the lower bound.
-    If no revenue is found, return null.
-    
+    CONTEXT: {search_text}
+    TASK: Identify annual revenue for {client_name}. Return integer (e.g. 50000000). Return null if not found.
     OUTPUT JSON: {{ "annual_revenue": (Number or null) }}
     """
-    
-    # Quick, cheap call
     result = run_gemini_agent("Revenue Scout", "gemini-2.5-flash", prompt)
-    if result and result.get("annual_revenue"):
-        return result["annual_revenue"]
+    if result and result.get("annual_revenue"): return result["annual_revenue"]
     return None
 
 # --- WORKER FUNCTION ---
 def process_single_product(prod, client_name, industry, problem_statement, context_data, revenue_est, beta_mode):
     if beta_mode:
-        return prod, {"impact": "BETA PREVIEW", "bullets": ["Beta"], "math_variables": {"scenario_title": "Beta", "cost_per_unit_value":0}}
+        return prod, {"impact": "BETA PREVIEW", "bullets": ["Beta"], "roi_components": []}
 
-    # 1. Get Benchmarks using the AI-extracted Revenue
     profile_data, size_label, industry_key = benchmarks.get_benchmark_profile(industry, revenue_est)
-    
     full_manual = PRODUCT_MANUALS.get(prod, "No manual found.")
-    manual_snippet = full_manual[:15000]
+    manual_snippet = full_manual[:20000]
 
-    # Step 2: Triage
+    # Step 1: Triage (Identify Scenario)
     triage_prompt = f"""
     CLIENT: {client_name}
     PROBLEM: "{problem_statement}"
     MANUAL: {manual_snippet} 
-    TASK: Select the ONE 'ROI Metric' or 'Usage Scenario' that best solves the User Problem.
+    TASK: Select the ONE 'Usage Scenario' that best solves the User Problem.
     Output JSON ONLY: {{ "selected_scenario_name": "Name of scenario", "reasoning": "Why it fits" }}
     """
     triage_result = run_gemini_agent("Triage Doctor", "gemini-2.5-flash", triage_prompt)
     scenario = triage_result.get("selected_scenario_name", "Standard ROI") if triage_result else "Standard ROI"
 
-    # Step 3: CFO (Injected with Benchmarks)
+    # Step 2: CFO (Multi-Factor Calculation)
+    # We now ask for a LIST of savings components, not just one.
     cfo_prompt = f"""
-    CLIENT: {client_name} ({industry_key} - {size_label} Business)
+    CLIENT: {client_name} ({industry_key} - {size_label})
     PRODUCT: {prod}
     SCENARIO: {scenario}
-    CONTEXT: {context_data['context']}
+    BENCHMARK DATA: {json.dumps(profile_data, indent=2)}
     MANUAL SNIPPET: {manual_snippet}
     
-    BENCHMARK DATA (Truth Source):
-    {json.dumps(profile_data, indent=2)}
+    TASK: Calculate the Total Economic Impact.
+    1. Identify the TOP 3-4 financial drivers relevant to this product from the Benchmark Data.
+       (e.g., 'Reduced Downtime', 'Prevented Churn', 'Agent Productivity', 'DevOps Efficiency')
+    2. For EACH driver, calculate the Annual Savings using the Benchmarks.
+       - Logic: (Benchmark Cost * Quantity) * (Improvement Factor found in Manual or estimated)
+    3. Be specific. If the product is "Hammer QA", focus on Dev/QA metrics. If "VoiceWatch", focus on Ops/Incidents.
     
-    TASK: Generate a financial ROI table.
-    
-    CRITICAL RULES:
-    1. Use the "BENCHMARK DATA" for cost basis (e.g. agent_hourly_rate).
-    2. Automation must REDUCE the quantity (e.g. Hours, Incidents).
-    3. DO NOT hallucinate costs. Use the provided benchmarks.
-    
-    Output JSON: 
+    Output JSON Structure: 
     {{
-       "impact": "2-sentence impact statement.",
-       "bullets": ["Bullet 1", "Bullet 2", "Bullet 3"],
-       "math_variables": {{
-           "scenario_title": "{scenario}",
-           "metric_unit": "Unit (e.g. Hours, Incidents)",
-           "cost_per_unit_label": "Rate Label (e.g. Hourly Cost)",
-           "cost_per_unit_value": (Number from Benchmarks),
-           "before_label": "Current State",
-           "before_qty": (Number),
-           "after_label": "Future State",
-           "after_qty": (Number)
-       }}
+       "impact": "2-sentence executive summary of value.",
+       "bullets": ["Strategic Bullet 1", "Strategic Bullet 2", "Strategic Bullet 3"],
+       "roi_components": [
+           {{
+               "label": "e.g. Reduction in P1 Incidents",
+               "calculation_text": "e.g. 15 Incidents * $150k cost * 45% avoided",
+               "savings_value": (Number)
+           }},
+           {{
+               "label": "e.g. Automated Test Efficiency",
+               "calculation_text": "e.g. 400 manual hours * $90/hr * 8 projects",
+               "savings_value": (Number)
+           }}
+       ]
     }}
     """
     cfo_result = run_gemini_agent("CFO Analyst", "gemini-2.5-pro", cfo_prompt)
@@ -167,23 +145,11 @@ def process_single_product(prod, client_name, industry, problem_statement, conte
 def generate_tailored_content(client_name, industry, project_type, context_data, problem_statement, selected_products, mode='live'):
     results = {}
     is_beta = (mode == 'beta')
-    
-    # 1. Extract Revenue ONCE (Efficiency)
     revenue_est = extract_revenue_from_context(client_name, context_data['raw_search'])
     
-    # 2. Parallel Process Products
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
         future_to_prod = {
-            executor.submit(
-                process_single_product, 
-                prod, 
-                client_name, 
-                industry, 
-                problem_statement, 
-                context_data, 
-                revenue_est,  # Pass the extracted revenue down
-                is_beta
-            ): prod 
+            executor.submit(process_single_product, prod, client_name, industry, problem_statement, context_data, revenue_est, is_beta): prod 
             for prod in selected_products
         }
         for future in concurrent.futures.as_completed(future_to_prod):
@@ -202,24 +168,25 @@ def calculate_roi(product_data, user_costs):
     total_inv = 0
     total_save = 0
     for prod, data in product_data.items():
-        math = data.get('math_variables')
-        if not math: continue
+        components = data.get('roi_components', [])
         
+        # Calculate Total Savings from all AI-identified components
+        product_savings = sum([c.get('savings_value', 0) for c in components])
+        
+        # Calculate Cost
         cost_info = user_costs.get(prod, {'cost': 0, 'term': 12})
         investment = cost_info['cost'] * cost_info['term']
-        total_inv += investment
         
-        unit = float(math.get('cost_per_unit_value', 0))
-        before = float(math.get('before_qty', 0))
-        after = float(math.get('after_qty', 0))
-        
-        annual_savings = (unit * before) - (unit * after)
+        # Annualize investment for chart matching (simplification) vs Total Term
+        # For this report, we'll assume the savings are ANNUAL.
+        # If term > 12 months, we scale savings to match term.
         term_years = cost_info['term'] / 12.0
+        total_term_savings = product_savings * term_years
         
-        total_term_savings = annual_savings * term_years
+        total_inv += investment
         total_save += total_term_savings
         
-        results[prod] = {"investment": investment, "savings": total_term_savings, "math": math}
+        results[prod] = {"investment": investment, "savings": total_term_savings, "components": components}
         
     return results, total_inv, total_save
 
@@ -253,77 +220,87 @@ class ProReportPDF(FPDF):
         self.line(10, self.get_y()+4, 200, self.get_y()+4)
         self.ln(12)
 
-    def smart_row(self, c1_text, c2_text, c3_text, c1_color=(0,0,0), c3_color=(0,0,0)):
-        x_start = 15
-        col_widths = [95, 30, 50] 
-        y_start = self.get_y()
+    def draw_financial_table(self, components, total_savings, investment):
+        """ Draws a dynamic multi-row table for savings components """
+        start_y = self.get_y()
         
-        self.set_xy(x_start, y_start)
+        # 1. Table Header
+        self.set_fill_color(241, 245, 249) # Light Gray
+        self.rect(10, start_y, 190, 10, 'F')
+        self.set_xy(15, start_y + 2)
         self.set_font('Helvetica', 'B', 10)
-        self.set_text_color(*c1_color)
-        self.multi_cell(col_widths[0], 6, sanitize_text(c1_text), align='L')
-        y_end_1 = self.get_y()
-        
-        self.set_xy(x_start + col_widths[0], y_start)
-        self.set_font('Helvetica', '', 10)
-        self.set_text_color(0, 0, 0)
-        self.multi_cell(col_widths[1], 6, sanitize_text(c2_text), align='C')
-        y_end_2 = self.get_y()
-        
-        self.set_xy(x_start + col_widths[0] + col_widths[1], y_start)
-        self.set_font('Helvetica', 'B', 10)
-        self.set_text_color(*c3_color)
-        self.multi_cell(col_widths[2], 6, sanitize_text(c3_text), align='R')
-        y_end_3 = self.get_y()
-        
-        self.set_y(max(y_end_1, y_end_2, y_end_3) + 4)
-
-    def draw_math_table(self, math, save, inv):
-        self.set_font('Helvetica', 'B', 12)
-        self.set_text_color(15, 23, 42)
-        scenario = sanitize_text(math.get('scenario_title', 'ROI Analysis'))
-        self.cell(0, 8, f"Scenario: {scenario}", ln=True)
-        self.ln(2)
-        
-        self.set_font('Helvetica', 'I', 9)
-        self.set_text_color(100, 100, 100)
-        unit_cost = math.get('cost_per_unit_value', 0)
-        unit_name = sanitize_text(math.get('metric_unit', 'Unit'))
-        self.cell(0, 6, f"Benchmark: {format_currency(unit_cost)} per {unit_name}", ln=True)
+        self.set_text_color(71, 85, 105)
+        self.cell(90, 6, "Value Driver", ln=0)
+        self.cell(60, 6, "Basis of Calculation", ln=0)
+        self.cell(30, 6, "Annual Impact", align='R', ln=1)
         self.ln(4)
         
-        qty_before = math.get('before_qty', 0)
-        val_before = unit_cost * qty_before
-        self.smart_row(
-            c1_text=math.get('before_label', 'Before'),
-            c2_text=f"{qty_before:,.0f}",
-            c3_text=f"= {format_currency(val_before)} Risk",
-            c1_color=(185, 28, 28)
-        )
+        # 2. Rows
+        y = self.get_y()
+        self.set_text_color(15, 23, 42)
         
-        qty_after = math.get('after_qty', 0)
-        val_after = unit_cost * qty_after
-        self.smart_row(
-            c1_text=math.get('after_label', 'After'),
-            c2_text=f"{qty_after:,.0f}",
-            c3_text=f"= {format_currency(val_after)} Risk",
-            c1_color=(22, 163, 74)
-        )
+        for comp in components:
+            # Check for page break
+            if self.get_y() > 250:
+                self.add_page()
+                y = 20
+                self.set_y(y)
+            
+            label = sanitize_text(comp.get('label', 'Savings'))
+            calcs = sanitize_text(comp.get('calculation_text', ''))
+            val = comp.get('savings_value', 0)
+            
+            # Label (Col 1)
+            self.set_xy(15, y)
+            self.set_font('Helvetica', 'B', 9)
+            self.multi_cell(85, 5, label, align='L')
+            y_end_1 = self.get_y()
+            
+            # Calc Logic (Col 2)
+            self.set_xy(105, y)
+            self.set_font('Helvetica', 'I', 8)
+            self.set_text_color(100, 116, 139)
+            self.multi_cell(55, 5, calcs, align='L')
+            y_end_2 = self.get_y()
+            
+            # Value (Col 3)
+            self.set_xy(160, y)
+            self.set_font('Helvetica', 'B', 10)
+            self.set_text_color(22, 163, 74) # Green
+            self.cell(35, 5, format_currency(val), align='R')
+            
+            y = max(y_end_1, y_end_2) + 4
+            self.set_draw_color(226, 232, 240)
+            self.line(15, y-2, 195, y-2) # Separator line
+            
+        # 3. Summary Footer
+        self.ln(5)
+        self.set_xy(120, self.get_y())
+        self.set_font('Helvetica', 'B', 12)
+        self.set_text_color(15, 23, 42)
+        self.cell(40, 8, "Total Benefits:", align='R')
+        self.set_text_color(22, 163, 74)
+        self.cell(35, 8, format_currency(total_savings), align='R', ln=1)
         
+        self.set_xy(120, self.get_y())
+        self.set_font('Helvetica', 'B', 11)
+        self.set_text_color(100, 116, 139)
+        self.cell(40, 6, "Less Investment:", align='R')
+        self.set_text_color(185, 28, 28)
+        self.cell(35, 6, f"({format_currency(investment)})", align='R', ln=1)
+        
+        # Net
         self.ln(2)
-        self.set_draw_color(200, 200, 200)
-        self.line(120, self.get_y(), 200, self.get_y())
-        self.ln(2)
-        
-        is_positive = save > 0
-        color = (22, 163, 74) if is_positive else (185, 28, 28)
-        self.set_text_color(*color)
+        self.set_xy(120, self.get_y())
+        self.set_fill_color(240, 253, 244) # Green tint
+        self.rect(120, self.get_y(), 75, 12, 'F')
+        self.set_xy(120, self.get_y() + 2)
         self.set_font('Helvetica', 'B', 14)
-        label = "Net Benefit" if is_positive else "Net Cost"
-        
-        self.set_x(120)
-        self.cell(80, 10, f"{label}: {format_currency(save)}", align='R', ln=1)
-        self.ln(10)
+        self.set_text_color(21, 128, 61)
+        net = total_savings - investment
+        self.cell(40, 8, "NET VALUE:", align='R')
+        self.cell(35, 8, format_currency(net), align='R', ln=1)
+        self.ln(15)
 
     def card_box(self, label, value, subtext, x, y, w, h):
         self.set_xy(x, y)
@@ -331,25 +308,17 @@ class ProReportPDF(FPDF):
         self.set_draw_color(226, 232, 240)
         self.set_line_width(0.5)
         self.rect(x, y, w, h, 'DF')
-        
         self.set_xy(x, y + 6)
         self.set_font('Helvetica', 'B', 14)
-        
         if "ROI" in label or "SAVINGS" in label:
-             if "(" in value or "-" in value:
-                 self.set_text_color(185, 28, 28)
-             else:
-                 self.set_text_color(22, 163, 74)
-        else:
-            self.set_text_color(15, 23, 42)
-
+             if "(" in value or "-" in value: self.set_text_color(185, 28, 28)
+             else: self.set_text_color(22, 163, 74)
+        else: self.set_text_color(15, 23, 42)
         self.cell(w, 8, sanitize_text(value), align='C', ln=1)
-        
         self.set_xy(x, y + 16)
         self.set_font('Helvetica', 'B', 8)
         self.set_text_color(100, 116, 139)
         self.cell(w, 5, sanitize_text(label), align='C', ln=1)
-        
         self.set_xy(x, y + 21)
         self.set_font('Helvetica', 'I', 7)
         self.set_text_color(148, 163, 184)
@@ -359,25 +328,19 @@ def create_chart(inv, save):
     with plot_lock:
         plt.style.use('seaborn-v0_8-whitegrid')
         fig, ax = plt.subplots(figsize=(8, 4))
-        
         months = list(range(13))
         start = -1 * abs(inv)
         monthly = (save / 12) if save != 0 else 0
         flow = [start + (monthly * m) for m in months]
-        
         ax.plot(months, flow, color='#2563EB', linewidth=3, marker='o', markersize=6)
         ax.axhline(0, color='#64748B', linestyle='--', linewidth=1.5)
-        
         ax.set_title("Cumulative Cash Flow (Year 1)", fontsize=12, fontweight='bold', pad=15)
         ax.set_xlabel("Months", fontsize=9)
         ax.set_ylabel("Net Cash Position ($)", fontsize=9)
-        
         fmt = '${x:,.0f}'
         tick = mtick.StrMethodFormatter(fmt)
         ax.yaxis.set_major_formatter(tick)
-        
         plt.tight_layout()
-        
         buf = io.BytesIO()
         plt.savefig(buf, format='png', bbox_inches='tight', dpi=200)
         plt.close()
@@ -437,7 +400,6 @@ def generate_pdf():
     w, h = 60, 28
     pdf.card_box("PROJECTED SAVINGS", format_currency(tot_save), "Total Value Created", 10, y, w, h)
     pdf.card_box("TOTAL INVESTMENT", format_currency(tot_inv), "Software & Services", 75, y, w, h)
-    
     roi_pct = ((tot_save-tot_inv)/tot_inv)*100 if tot_inv > 0 else 0
     pdf.card_box("ROI %", f"{roi_pct:.0f}%", "Return on Investment", 140, y, w, h)
     
@@ -448,7 +410,7 @@ def generate_pdf():
     for p in prods:
         if p not in ai_data: continue
         d = ai_data[p]
-        calc = roi.get(p, {'savings':0, 'investment':0, 'math':{}})
+        calc = roi.get(p, {'savings':0, 'investment':0, 'components':[]})
         
         pdf.add_page()
         pdf.chapter_title(f"Analysis: {p}")
@@ -467,8 +429,9 @@ def generate_pdf():
             pdf.ln(2)
         pdf.ln(5)
         
-        if 'math_variables' in d:
-             pdf.draw_math_table(d['math_variables'], calc['savings'], calc['investment'])
+        # New Dynamic Table Draw
+        if 'roi_components' in d:
+             pdf.draw_financial_table(d['roi_components'], calc['savings'], calc['investment'])
     
     try:
         pdf_out = pdf.output(dest='S').encode('latin-1') 
