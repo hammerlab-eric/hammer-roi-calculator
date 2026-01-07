@@ -11,6 +11,7 @@ from tavily import TavilyClient
 import google.generativeai as genai
 from knowledge_base import PRODUCT_DATA, PRODUCT_MANUALS
 
+# Concurrency-safe plotting
 import matplotlib
 matplotlib.use('Agg')
 import threading
@@ -33,7 +34,18 @@ def sanitize_text(text):
     for char, rep in replacements.items(): text = text.replace(char, rep)
     return text.encode('latin-1', 'replace').decode('latin-1')
 
+def format_currency(value):
+    """ Return $1,234 or ($1,234) for negative """
+    try:
+        val = float(value)
+        if val < 0:
+            return f"(${abs(val):,.0f})"
+        return f"${val:,.0f}"
+    except:
+        return "$0"
+
 def get_tavily_context(client_name, client_url, industry):
+    """ Agent 2 (Parallel): The Researcher """
     if not TAVILY_API_KEY: return f"Standard {industry} challenges apply."
     try:
         tavily = TavilyClient(api_key=TAVILY_API_KEY)
@@ -43,7 +55,7 @@ def get_tavily_context(client_name, client_url, industry):
     except:
         return "Standard industry context."
 
-# --- GEMINI ENGINE ---
+# --- GEMINI AGENT ENGINE ---
 def run_gemini_agent(agent_role, model_name, prompt, beta_mode=False):
     if beta_mode: return None
     try:
@@ -67,8 +79,6 @@ def process_single_product(prod, client_name, industry, problem_statement, conte
         return prod, {"impact": "BETA PREVIEW", "bullets": ["Beta"], "math_variables": {"scenario_title": "Beta", "cost_per_unit_value":0}}
 
     full_manual = PRODUCT_MANUALS.get(prod, "No manual found.")
-    
-    # OPTIMIZATION: Reduced context to 15k chars to prevent timeouts
     manual_snippet = full_manual[:15000]
 
     # Step 1: Triage
@@ -113,7 +123,6 @@ def generate_tailored_content(client_name, industry, project_type, context_text,
     results = {}
     is_beta = (mode == 'beta')
     
-    # OPTIMIZATION: Max 3 workers to prevent CPU choking on small instances
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
         future_to_prod = {
             executor.submit(process_single_product, prod, client_name, industry, problem_statement, context_text, is_beta): prod 
@@ -155,69 +164,182 @@ def calculate_roi(product_data, user_costs):
         
     return results, total_inv, total_save
 
-# --- PDF GENERATOR ---
+# --- PDF GENERATOR (RE-ENGINEERED) ---
 class ProReportPDF(FPDF):
     def header(self):
-        self.set_fill_color(15, 23, 42)
-        self.rect(0, 0, 210, 20, 'F')
-        self.set_y(5); self.set_font('Helvetica', 'B', 12); self.set_text_color(255, 255, 255)
-        self.cell(10); self.cell(0, 10, 'STRATEGIC VALUE ANALYSIS', ln=0)
-        self.ln(10)
+        # Professional Header with Gradient-like effect
+        self.set_fill_color(15, 23, 42) # Navy
+        self.rect(0, 0, 210, 25, 'F')
+        self.set_y(8)
+        self.set_font('Helvetica', 'B', 14)
+        self.set_text_color(255, 255, 255)
+        self.cell(10)
+        self.cell(0, 10, 'STRATEGIC VALUE ANALYSIS', ln=0)
+        self.set_font('Helvetica', '', 10)
+        self.set_text_color(200, 200, 200)
+        self.cell(0, 10, 'CONFIDENTIAL PREVIEW', ln=1, align='R')
+        self.ln(15)
     
     def footer(self):
-        self.set_y(-15); self.set_font('Helvetica', 'I', 8); self.set_text_color(150, 150, 150)
+        self.set_y(-15)
+        self.set_font('Helvetica', 'I', 8)
+        self.set_text_color(128, 128, 128)
         self.cell(0, 10, f'Page {self.page_no()}', align='C')
 
-    def chapter_title(self, title):
-        self.set_font('Helvetica', 'B', 16); self.set_text_color(15, 23, 42)
+    def chapter_title(self, title, subtitle=None):
+        self.set_font('Helvetica', 'B', 16)
+        self.set_text_color(15, 23, 42)
         self.cell(0, 8, sanitize_text(title), ln=True)
-        self.line(10, self.get_y()+2, 200, self.get_y()+2); self.ln(10)
+        if subtitle:
+            self.set_font('Helvetica', 'I', 11)
+            self.set_text_color(100, 116, 139)
+            self.cell(0, 6, sanitize_text(subtitle), ln=True)
+        
+        # Decorative Line
+        self.set_draw_color(37, 99, 235) # Blue Accent
+        self.set_line_width(0.8)
+        self.line(10, self.get_y()+4, 200, self.get_y()+4)
+        self.ln(12)
 
     def draw_math_table(self, math, save, inv):
-        self.set_fill_color(248, 250, 252); self.rect(10, self.get_y(), 190, 35, 'F')
-        self.set_xy(15, self.get_y()+5); self.set_font('Helvetica', 'B', 10); self.set_text_color(15, 23, 42)
-        self.cell(0, 5, f"Scenario: {sanitize_text(math.get('scenario_title', 'ROI'))}", ln=True)
+        # Background Box
+        start_y = self.get_y()
+        self.set_fill_color(248, 250, 252) # Light Gray/Blue
+        self.rect(10, start_y, 190, 50, 'F') # Taller box for breathing room
         
-        y = self.get_y() + 2; col1=60; col2=100
+        self.set_xy(15, start_y + 5)
+        self.set_font('Helvetica', 'B', 11)
+        self.set_text_color(15, 23, 42)
+        scenario = sanitize_text(math.get('scenario_title', 'ROI Analysis'))
+        self.cell(0, 6, f"Scenario: {scenario}", ln=True)
+        
+        # Columns setup
+        y_base = self.get_y() + 5
+        col1_x = 15
+        col2_x = 70  # Widened column 1
+        col3_x = 130 # Added specific column for values
+        
+        # 1. Benchmark Row
+        self.set_xy(col1_x, y_base)
         self.set_font('Helvetica', 'B', 9); self.set_text_color(100,100,100)
-        self.set_xy(15, y); self.cell(col1, 5, "Benchmark:"); self.set_font('Helvetica', ''); self.set_text_color(0)
-        self.cell(col2, 5, f"${math.get('cost_per_unit_value', 0):,.2f} / {sanitize_text(math.get('metric_unit', 'Unit'))}")
+        self.cell(50, 6, "Industry Benchmark:", ln=0)
         
-        self.set_xy(15, y+6); self.set_font('Helvetica', 'B', 9); self.set_text_color(185, 28, 28)
-        self.cell(col1, 5, sanitize_text(math.get('before_label', 'Before'))); self.set_font('Helvetica', ''); self.set_text_color(0)
-        val = math.get('cost_per_unit_value', 0) * math.get('before_qty', 0)
-        self.cell(col2, 5, f"{math.get('before_qty', 0)} units = ${val:,.0f} Risk")
+        self.set_xy(col2_x, y_base)
+        self.set_font('Helvetica', '', 9); self.set_text_color(15, 23, 42)
+        unit_cost = math.get('cost_per_unit_value', 0)
+        unit_name = sanitize_text(math.get('metric_unit', 'Unit'))
+        self.cell(100, 6, f"{format_currency(unit_cost)} per {unit_name}", ln=1)
         
-        self.set_xy(15, y+12); self.set_font('Helvetica', 'B', 9); self.set_text_color(22, 163, 74)
-        self.cell(col1, 5, sanitize_text(math.get('after_label', 'After'))); self.set_font('Helvetica', ''); self.set_text_color(0)
-        val = math.get('cost_per_unit_value', 0) * math.get('after_qty', 0)
-        self.cell(col2, 5, f"{math.get('after_qty', 0)} units = ${val:,.0f} Risk")
+        # 2. Before Row (Status Quo)
+        y_next = self.get_y() + 2
+        self.set_xy(col1_x, y_next)
+        self.set_font('Helvetica', 'B', 9); self.set_text_color(185, 28, 28) # Red label
+        self.cell(50, 6, sanitize_text(math.get('before_label', 'Before')), ln=0)
         
-        self.set_xy(130, y+10); self.set_font('Helvetica', 'B', 12); self.set_text_color(37, 99, 235)
-        self.cell(60, 10, f"Net Savings: ${save:,.0f}", align='R'); self.ln(20)
+        self.set_xy(col2_x, y_next)
+        self.set_font('Helvetica', '', 9); self.set_text_color(0,0,0)
+        qty_before = math.get('before_qty', 0)
+        val_before = unit_cost * qty_before
+        self.cell(60, 6, f"{qty_before:,.0f} {unit_name}s", ln=0)
+        
+        self.set_xy(col3_x, y_next)
+        self.set_font('Helvetica', 'B', 9)
+        self.cell(50, 6, f"= {format_currency(val_before)} Risk", ln=1)
+        
+        # 3. After Row (Solution)
+        y_next = self.get_y() + 2
+        self.set_xy(col1_x, y_next)
+        self.set_font('Helvetica', 'B', 9); self.set_text_color(22, 163, 74) # Green label
+        self.cell(50, 6, sanitize_text(math.get('after_label', 'After')), ln=0)
+        
+        self.set_xy(col2_x, y_next)
+        self.set_font('Helvetica', '', 9); self.set_text_color(0,0,0)
+        qty_after = math.get('after_qty', 0)
+        val_after = unit_cost * qty_after
+        self.cell(60, 6, f"{qty_after:,.0f} {unit_name}s", ln=0)
+        
+        self.set_xy(col3_x, y_next)
+        self.set_font('Helvetica', 'B', 9)
+        self.cell(50, 6, f"= {format_currency(val_after)} Cost", ln=1)
+        
+        # 4. Net Savings Logic
+        y_summary = start_y + 35
+        self.set_xy(140, y_summary)
+        
+        is_positive = save > 0
+        color = (22, 163, 74) if is_positive else (185, 28, 28) # Green or Red
+        self.set_text_color(*color)
+        self.set_font('Helvetica', 'B', 14)
+        label = "Net Savings" if is_positive else "Net Cost"
+        self.cell(60, 8, f"{label}: {format_currency(save)}", align='R', ln=1)
+        
+        self.ln(10) # Padding after table
 
     def card_box(self, label, value, subtext, x, y, w, h):
-        self.set_xy(x, y); self.set_fill_color(248, 250, 252); self.rect(x, y, w, h, 'DF')
-        self.set_xy(x, y+5); self.set_font('Helvetica', 'B', 14); self.set_text_color(37, 99, 235)
-        self.cell(w, 10, sanitize_text(value), align='C', ln=1)
-        self.set_xy(x, y+16); self.set_font('Helvetica', 'B', 9); self.set_text_color(51, 65, 85)
+        self.set_xy(x, y)
+        self.set_fill_color(255, 255, 255)
+        self.set_draw_color(226, 232, 240) # Slate-200
+        self.set_line_width(0.5)
+        self.rect(x, y, w, h, 'DF')
+        
+        # Value (Center, Large)
+        self.set_xy(x, y + 6)
+        self.set_font('Helvetica', 'B', 14)
+        
+        # Color logic for ROI/Savings
+        if "ROI" in label or "SAVINGS" in label:
+             # Check if value is negative (contains parenthesis or -)
+             if "(" in value or "-" in value:
+                 self.set_text_color(185, 28, 28) # Red
+             else:
+                 self.set_text_color(22, 163, 74) # Green
+        else:
+            self.set_text_color(15, 23, 42) # Navy
+
+        self.cell(w, 8, sanitize_text(value), align='C', ln=1)
+        
+        # Label (Center, Small, Uppercase)
+        self.set_xy(x, y + 16)
+        self.set_font('Helvetica', 'B', 8)
+        self.set_text_color(100, 116, 139) # Slate-500
         self.cell(w, 5, sanitize_text(label), align='C', ln=1)
-        self.set_xy(x, y+22); self.set_font('Helvetica', '', 7); self.set_text_color(100, 116, 139)
-        self.cell(w, 5, sanitize_text(subtext), align='C')
+        
+        # Subtext (Bottom, Tiny)
+        self.set_xy(x, y + 21)
+        self.set_font('Helvetica', 'I', 7)
+        self.set_text_color(148, 163, 184) # Slate-400
+        self.cell(w, 4, sanitize_text(subtext), align='C')
 
 def create_chart(inv, save):
     with plot_lock:
         plt.style.use('seaborn-v0_8-whitegrid')
-        fig, ax = plt.subplots(figsize=(7, 3.5))
+        fig, ax = plt.subplots(figsize=(8, 4)) # Wider chart
+        
         months = list(range(13))
         start = -1 * abs(inv)
-        monthly = (save / 12) if save > 0 else 1000
+        monthly = (save / 12) if save != 0 else 0
         flow = [start + (monthly * m) for m in months]
-        ax.plot(months, flow, color='#2563EB', linewidth=3, marker='o'); ax.axhline(0, color='#64748B', linestyle='--')
-        ax.set_title("Cash Flow (Year 1)", fontweight='bold'); ax.grid(True, linestyle=':')
+        
+        # Plot Line
+        ax.plot(months, flow, color='#2563EB', linewidth=3, marker='o', markersize=6)
+        
+        # Breakeven Line
+        ax.axhline(0, color='#64748B', linestyle='--', linewidth=1.5)
+        
+        # Formatting
+        ax.set_title("Cumulative Cash Flow (Year 1)", fontsize=12, fontweight='bold', pad=15)
+        ax.set_xlabel("Months", fontsize=9)
+        ax.set_ylabel("Net Cash Position ($)", fontsize=9)
+        
+        # Currency formatting for Y-axis
+        fmt = '${x:,.0f}'
+        tick = mtick.StrMethodFormatter(fmt)
+        ax.yaxis.set_major_formatter(tick)
+        
+        plt.tight_layout()
         
         buf = io.BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight', dpi=150)
+        plt.savefig(buf, format='png', bbox_inches='tight', dpi=200) # Higher DPI
         plt.close()
         buf.seek(0)
         return buf
@@ -251,31 +373,70 @@ def generate_pdf():
     roi, tot_inv, tot_save = calculate_roi(ai_data, costs)
     
     pdf = ProReportPDF()
-    pdf.set_auto_page_break(True, 15); pdf.add_page()
-    pdf.ln(5); pdf.set_font('Helvetica', 'B', 20); pdf.set_text_color(15, 23, 42)
-    pdf.cell(0, 10, f"Strategic ROI Analysis: {client}", ln=True)
-    pdf.set_font('Helvetica', '', 12); pdf.set_text_color(51, 65, 85)
-    pdf.cell(0, 8, f"Problem: {prob[:60]}...", ln=True); pdf.ln(10)
+    pdf.set_auto_page_break(True, 15)
     
-    y = pdf.get_y(); w, h = 60, 25
-    pdf.card_box("SAVINGS", f"${tot_save:,.0f}", "Total Value", 10, y, w, h)
-    pdf.card_box("INVESTMENT", f"${tot_inv:,.0f}", "Total Cost", 75, y, w, h)
+    # --- PAGE 1: EXECUTIVE SUMMARY ---
+    pdf.add_page()
+    pdf.ln(5)
+    pdf.set_font('Helvetica', 'B', 24)
+    pdf.set_text_color(15, 23, 42)
+    pdf.cell(0, 10, f"Strategic ROI Analysis", ln=True)
+    pdf.set_font('Helvetica', '', 14)
+    pdf.set_text_color(100, 116, 139)
+    pdf.cell(0, 8, f"Prepared for: {client}", ln=True)
+    pdf.ln(10)
+    
+    # Problem Statement Box
+    pdf.set_fill_color(241, 245, 249)
+    pdf.rect(10, pdf.get_y(), 190, 25, 'F')
+    pdf.set_xy(15, pdf.get_y()+5)
+    pdf.set_font('Helvetica', 'I', 10)
+    pdf.set_text_color(71, 85, 105)
+    pdf.multi_cell(180, 5, f"Focus: {prob}")
+    pdf.ln(10)
+    
+    # Scorecards
+    y = pdf.get_y()
+    w, h = 60, 28
+    pdf.card_box("PROJECTED SAVINGS", format_currency(tot_save), "Total Value Created", 10, y, w, h)
+    pdf.card_box("TOTAL INVESTMENT", format_currency(tot_inv), "Software & Services", 75, y, w, h)
+    
     roi_pct = ((tot_save-tot_inv)/tot_inv)*100 if tot_inv > 0 else 0
-    pdf.card_box("ROI", f"{roi_pct:.0f}%", "Return", 140, y, w, h)
+    pdf.card_box("ROI %", f"{roi_pct:.0f}%", "Return on Investment", 140, y, w, h)
     
-    pdf.set_y(y + h + 15); chart = create_chart(tot_inv, tot_save)
-    pdf.image(chart, x=10, w=180)
+    # Chart
+    pdf.set_y(y + h + 20)
+    chart = create_chart(tot_inv, tot_save)
+    pdf.image(chart, x=10, w=190)
     
+    # --- PRODUCT PAGES ---
     for p in prods:
         if p not in ai_data: continue
-        d = ai_data[p]; calc = roi.get(p, {'savings':0, 'investment':0, 'math':{}})
-        pdf.add_page(); pdf.chapter_title(f"Analysis: {p}")
-        pdf.set_font('Helvetica', 'I', 10); pdf.multi_cell(0, 5, sanitize_text(d.get('impact', ''))); pdf.ln(5)
+        d = ai_data[p]
+        calc = roi.get(p, {'savings':0, 'investment':0, 'math':{}})
+        
+        pdf.add_page()
+        pdf.chapter_title(f"Analysis: {p}")
+        
+        # Strategic Impact
+        pdf.set_font('Helvetica', 'I', 11)
+        pdf.set_text_color(51, 65, 85)
+        pdf.multi_cell(0, 6, sanitize_text(d.get('impact', '')))
+        pdf.ln(8)
+        
+        # Bullets
         pdf.set_font('Helvetica', '', 10)
+        pdf.set_text_color(15, 23, 42)
         for b in d.get('bullets', []):
-            pdf.set_x(15); pdf.cell(5, 5, "+"); pdf.multi_cell(170, 5, sanitize_text(b))
-        pdf.ln(10)
-        if 'math_variables' in d: pdf.draw_math_table(d['math_variables'], calc['savings'], calc['investment'])
+            pdf.set_x(15)
+            pdf.cell(5, 6, "•", ln=0)
+            pdf.multi_cell(170, 6, sanitize_text(b))
+            pdf.ln(2)
+        pdf.ln(5)
+        
+        # Math Table
+        if 'math_variables' in d:
+             pdf.draw_math_table(d['math_variables'], calc['savings'], calc['investment'])
     
     try:
         pdf_out = pdf.output(dest='S').encode('latin-1') 
@@ -285,7 +446,7 @@ def generate_pdf():
     return send_file(
         io.BytesIO(pdf_out),
         as_attachment=True,
-        download_name="generated_roi_report.pdf",
+        download_name="Strategic_ROI_Analysis.pdf",
         mimetype="application/pdf"
     )
 
