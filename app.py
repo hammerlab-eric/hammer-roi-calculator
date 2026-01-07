@@ -45,25 +45,21 @@ def format_currency(value):
 
 def get_tavily_context(client_name, client_url, industry):
     """ 
-    Returns a dict with 'context_text' and 'revenue_est' if found, 
-    so we can determine business size intelligently.
+    Searches for strategic context AND revenue data.
     """
-    default_resp = {"context": f"Standard {industry} challenges.", "revenue": None}
+    default_resp = {"context": f"Standard {industry} challenges.", "raw_search": ""}
     
     if not TAVILY_API_KEY: return default_resp
     
     try:
         tavily = TavilyClient(api_key=TAVILY_API_KEY)
-        # We ask for revenue specifically in the query now
-        query = f"Financial revenue 2024/2025 and strategic priorities for {client_name} ({client_url}) in {industry}?"
-        response = tavily.search(query=query, search_depth="basic", max_results=2)
+        # Explicitly ask for revenue to ensure the data is in the text for the AI to find
+        query = f"Annual revenue and strategic priorities for {client_name} ({client_url}) in {industry} 2024/2025?"
+        response = tavily.search(query=query, search_depth="basic", max_results=3)
         
-        # Combine snippets
-        text = "\n".join([f"- {r['content'][:200]}..." for r in response['results']])
-        
-        # Simple extraction attempt (This is a simplified approach, usually we'd use regex or AI)
-        # For now, we pass the text context and let the main flow handle sizing via benchmarks logic if explicit revenue isn't parsed.
-        return {"context": text, "revenue": None} 
+        # Combine snippets into one text block
+        text = "\n".join([f"- {r['content'][:300]}..." for r in response['results']])
+        return {"context": text, "raw_search": text} 
     except:
         return default_resp
 
@@ -85,14 +81,37 @@ def run_gemini_agent(agent_role, model_name, prompt, beta_mode=False):
         print(f"ERROR: {model_name} failed: {e}")
         return None
 
+# --- NEW: REVENUE SCOUT AGENT ---
+def extract_revenue_from_context(client_name, search_text):
+    """
+    Uses Gemini Flash to read the Tavily search results and extract a single integer for revenue.
+    """
+    if not search_text: return None
+    
+    prompt = f"""
+    CONTEXT:
+    {search_text}
+    
+    TASK: Identify the annual revenue for {client_name} from the context above.
+    If a range is given, use the lower bound.
+    If no revenue is found, return null.
+    
+    OUTPUT JSON: {{ "annual_revenue": (Number or null) }}
+    """
+    
+    # Quick, cheap call
+    result = run_gemini_agent("Revenue Scout", "gemini-2.5-flash", prompt)
+    if result and result.get("annual_revenue"):
+        return result["annual_revenue"]
+    return None
+
 # --- WORKER FUNCTION ---
-def process_single_product(prod, client_name, industry, problem_statement, context_data, beta_mode):
+def process_single_product(prod, client_name, industry, problem_statement, context_data, revenue_est, beta_mode):
     if beta_mode:
         return prod, {"impact": "BETA PREVIEW", "bullets": ["Beta"], "math_variables": {"scenario_title": "Beta", "cost_per_unit_value":0}}
 
-    # 1. Get Benchmarks for this specific client
-    #    We pass None for revenue for now (defaults to Medium), or we could parse it from context_data if we added logic.
-    profile_data, size_label, industry_key = benchmarks.get_benchmark_profile(industry, None)
+    # 1. Get Benchmarks using the AI-extracted Revenue
+    profile_data, size_label, industry_key = benchmarks.get_benchmark_profile(industry, revenue_est)
     
     full_manual = PRODUCT_MANUALS.get(prod, "No manual found.")
     manual_snippet = full_manual[:15000]
@@ -116,13 +135,13 @@ def process_single_product(prod, client_name, industry, problem_statement, conte
     CONTEXT: {context_data['context']}
     MANUAL SNIPPET: {manual_snippet}
     
-    BENCHMARK DATA (Use these as Truth Source):
+    BENCHMARK DATA (Truth Source):
     {json.dumps(profile_data, indent=2)}
     
     TASK: Generate a financial ROI table.
     
     CRITICAL RULES:
-    1. Use the "BENCHMARK DATA" above for costs (e.g. agent_hourly_rate, cost_of_downtime).
+    1. Use the "BENCHMARK DATA" for cost basis (e.g. agent_hourly_rate).
     2. Automation must REDUCE the quantity (e.g. Hours, Incidents).
     3. DO NOT hallucinate costs. Use the provided benchmarks.
     
@@ -149,9 +168,22 @@ def generate_tailored_content(client_name, industry, project_type, context_data,
     results = {}
     is_beta = (mode == 'beta')
     
+    # 1. Extract Revenue ONCE (Efficiency)
+    revenue_est = extract_revenue_from_context(client_name, context_data['raw_search'])
+    
+    # 2. Parallel Process Products
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
         future_to_prod = {
-            executor.submit(process_single_product, prod, client_name, industry, problem_statement, context_data, is_beta): prod 
+            executor.submit(
+                process_single_product, 
+                prod, 
+                client_name, 
+                industry, 
+                problem_statement, 
+                context_data, 
+                revenue_est,  # Pass the extracted revenue down
+                is_beta
+            ): prod 
             for prod in selected_products
         }
         for future in concurrent.futures.as_completed(future_to_prod):
@@ -176,10 +208,6 @@ def calculate_roi(product_data, user_costs):
         cost_info = user_costs.get(prod, {'cost': 0, 'term': 12})
         investment = cost_info['cost'] * cost_info['term']
         total_inv += investment
-        
-        # Savings Calculation
-        # Annualized Savings = (Rate * Old_Qty) - (Rate * New_Qty)
-        # Then multiplied by Term (in years)
         
         unit = float(math.get('cost_per_unit_value', 0))
         before = float(math.get('before_qty', 0))
