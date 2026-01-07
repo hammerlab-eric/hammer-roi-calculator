@@ -73,7 +73,6 @@ def run_gemini_agent(agent_role, model_name, prompt, beta_mode=False):
         print(f"ERROR: {model_name} failed: {e}")
         return None
 
-# --- REVENUE SCOUT ---
 def extract_revenue_from_context(client_name, search_text):
     if not search_text: return None
     prompt = f"""
@@ -85,55 +84,103 @@ def extract_revenue_from_context(client_name, search_text):
     if result and result.get("annual_revenue"): return result["annual_revenue"]
     return None
 
+# --- SELECTOR LOGIC TABLE (The Brain) ---
+# Exact mapping of Products -> 3 Specific Drivers
+SELECTOR_LOGIC = {
+    "Hammer QA": {
+        "Efficiency": {"label": "Regression Automation", "desc": "Eliminates manual UAT and 'test fatigue'", "formula": "Manual_Test_Hours * Releases * Hourly_Rate"},
+        "Risk":       {"label": "Shift-Left Detection", "desc": "Prevents defects from reaching production via CI/CD", "formula": "Defects_Caught_Early * Cost_Difference_to_Fix"},
+        "Strategic":  {"label": "Agile Velocity", "desc": "Parallel execution compresses days into minutes", "formula": "Project_Days_Saved * Daily_Revenue_per_Service"}
+    },
+    "Hammer VoiceExplorer": {
+        "Efficiency": {"label": "Discovery Automation", "desc": "Maps legacy IVRs with 80% less effort", "formula": "Discovery_Hours_Saved * Consultant_Rate"},
+        "Risk":       {"label": "Design Adherence", "desc": "Identifies 'negative test' navigation errors before buildout", "formula": "Logic_Gaps_Found * Rework_Cost_per_Gap"},
+        "Strategic":  {"label": "Migration Assurance", "desc": "Prevents schedule creep caused by undocumented systems", "formula": "Migration_Delay_Days * Daily_Project_Burn_Rate"}
+    },
+    "Hammer Performance": {
+        "Efficiency": {"label": "Volume Validation", "desc": "Simulates peak traffic to verify stability post-patch", "formula": "Testing_Hours * Hourly_Rate"},
+        "Risk":       {"label": "Day 1 Outage Avoidance", "desc": "Validates cloud migrations before cutover", "formula": "Probability_of_Fail * Cost_of_Downtime"},
+        "Strategic":  {"label": "Emergency Remediation", "desc": "Eliminates 'all-hands' troubleshooting", "formula": "War_Room_Hours * Senior_Eng_Rate * Staff_Count"}
+    },
+    "Hammer VoiceWatch": {
+        "Efficiency": {"label": "MTTR Reduction", "desc": "Pinpoints if faults are Carrier, SBC, or IVR", "formula": "MTTR_Reduction_Hours * Cost_of_Downtime"},
+        "Risk":       {"label": "Outage Prevention", "desc": "Identifies 95% of errors before customers are impacted", "formula": "Major_Incidents_Prevented * Cost_of_Outage"},
+        "Strategic":  {"label": "Silent Failure Detection", "desc": "24/7 monitoring of TFN/IVR reachability", "formula": "Lost_Call_Volume * Avg_Customer_LTV"}
+    },
+    "Hammer Edge": {
+        "Efficiency": {"label": "Mean Time to Innocence", "desc": "Proves fault domain (Home WiFi vs. VDI/SBC)", "formula": "Agent_Downtime * Hourly_Rate * Agent_Count"},
+        "Risk":       {"label": "Hardware Lifecycle ROI", "desc": "Only replaces PCs with proven WMI/Perfmon lag", "formula": "Extension_of_PC_Life * Replacement_Cost"},
+        "Strategic":  {"label": "VDI/CX Stability", "desc": "Ensures remote work doesn't degrade CSAT or increase churn", "formula": "CSAT_Improvement * Churn_Reduction_Value"}
+    },
+    "Ativa Enterprise": {
+        "Efficiency": {"label": "Cross-Domain Correlation", "desc": "Unifies subscriber, service, and network data", "formula": "Troubleshooting_Hours * Senior_Eng_Rate"},
+        "Risk":       {"label": "Predictive Remediation", "desc": "AI/ML prevents incidents via automated scaling", "formula": "Predictive_Fixes * Major_Outage_Cost"},
+        "Strategic":  {"label": "B2B Service Loyalty", "desc": "Multi-tenant portals for enterprise SLA proof", "formula": "B2B_Contract_Value * Churn_Rate_Reduction"}
+    }
+}
+
 # --- WORKER FUNCTION ---
 def process_single_product(prod, client_name, industry, problem_statement, context_data, revenue_est, beta_mode):
     if beta_mode:
         return prod, {"impact": "BETA PREVIEW", "bullets": ["Beta"], "roi_components": []}
 
     profile_data, size_label, industry_key = benchmarks.get_benchmark_profile(industry, revenue_est)
-    full_manual = PRODUCT_MANUALS.get(prod, "No manual found.")
-    manual_snippet = full_manual[:20000]
+    
+    # Fuzzy Match Logic to find correct Product Rules
+    product_rules = {}
+    for key in SELECTOR_LOGIC.keys():
+        if key.lower() in prod.lower():
+            product_rules = SELECTOR_LOGIC[key]
+            break
+            
+    # Default fallback if no match
+    if not product_rules:
+        product_rules = SELECTOR_LOGIC["Hammer QA"]
 
-    # Step 1: Triage (Identify Scenario)
+    # Step 1: Triage (Scenario Name)
     triage_prompt = f"""
     CLIENT: {client_name}
     PROBLEM: "{problem_statement}"
-    MANUAL: {manual_snippet} 
-    TASK: Select the ONE 'Usage Scenario' that best solves the User Problem.
+    TASK: Select the ONE 'Usage Scenario' name for {prod}.
     Output JSON ONLY: {{ "selected_scenario_name": "Name of scenario", "reasoning": "Why it fits" }}
     """
     triage_result = run_gemini_agent("Triage Doctor", "gemini-2.5-flash", triage_prompt)
     scenario = triage_result.get("selected_scenario_name", "Standard ROI") if triage_result else "Standard ROI"
 
-    # Step 2: CFO (Multi-Factor Calculation)
-    # We now ask for a LIST of savings components, not just one.
+    # Step 2: CFO (Strict Logic Execution)
     cfo_prompt = f"""
     CLIENT: {client_name} ({industry_key} - {size_label})
     PRODUCT: {prod}
     SCENARIO: {scenario}
     BENCHMARK DATA: {json.dumps(profile_data, indent=2)}
-    MANUAL SNIPPET: {manual_snippet}
     
-    TASK: Calculate the Total Economic Impact.
-    1. Identify the TOP 3-4 financial drivers relevant to this product from the Benchmark Data.
-       (e.g., 'Reduced Downtime', 'Prevented Churn', 'Agent Productivity', 'DevOps Efficiency')
-    2. For EACH driver, calculate the Annual Savings using the Benchmarks.
-       - Logic: (Benchmark Cost * Quantity) * (Improvement Factor found in Manual or estimated)
-    3. Be specific. If the product is "Hammer QA", focus on Dev/QA metrics. If "VoiceWatch", focus on Ops/Incidents.
+    LOGIC RULES (You MUST calculate these 3 specific drivers):
+    {json.dumps(product_rules, indent=2)}
     
-    Output JSON Structure: 
+    TASK: Calculate Total Economic Impact.
+    1. For each driver (Efficiency, Risk, Strategic), find reasonable values for the variables in the formula.
+       - Use Benchmarks where possible (e.g. Hourly Rates).
+       - Estimate Operational metrics (e.g. Manual Test Hours) based on a {size_label} company size.
+    2. Perform the math.
+    
+    Output JSON: 
     {{
-       "impact": "2-sentence executive summary of value.",
+       "impact": "2-sentence executive summary.",
        "bullets": ["Strategic Bullet 1", "Strategic Bullet 2", "Strategic Bullet 3"],
        "roi_components": [
            {{
-               "label": "e.g. Reduction in P1 Incidents",
-               "calculation_text": "e.g. 15 Incidents * $150k cost * 45% avoided",
+               "label": "{product_rules.get('Efficiency', {}).get('label')}",
+               "calculation_text": "Show formula with numbers (e.g. 100 hrs * $50)",
                "savings_value": (Number)
            }},
            {{
-               "label": "e.g. Automated Test Efficiency",
-               "calculation_text": "e.g. 400 manual hours * $90/hr * 8 projects",
+               "label": "{product_rules.get('Risk', {}).get('label')}",
+               "calculation_text": "Show formula with numbers",
+               "savings_value": (Number)
+           }},
+           {{
+               "label": "{product_rules.get('Strategic', {}).get('label')}",
+               "calculation_text": "Show formula with numbers",
                "savings_value": (Number)
            }}
        ]
@@ -169,17 +216,13 @@ def calculate_roi(product_data, user_costs):
     total_save = 0
     for prod, data in product_data.items():
         components = data.get('roi_components', [])
-        
-        # Calculate Total Savings from all AI-identified components
         product_savings = sum([c.get('savings_value', 0) for c in components])
         
-        # Calculate Cost
         cost_info = user_costs.get(prod, {'cost': 0, 'term': 12})
         investment = cost_info['cost'] * cost_info['term']
         
-        # Annualize investment for chart matching (simplification) vs Total Term
-        # For this report, we'll assume the savings are ANNUAL.
-        # If term > 12 months, we scale savings to match term.
+        # Annualized Logic: We assume the AI returns Annual Savings.
+        # We scale this to the contract term (e.g. 3 years = 3x savings)
         term_years = cost_info['term'] / 12.0
         total_term_savings = product_savings * term_years
         
@@ -221,11 +264,9 @@ class ProReportPDF(FPDF):
         self.ln(12)
 
     def draw_financial_table(self, components, total_savings, investment):
-        """ Draws a dynamic multi-row table for savings components """
         start_y = self.get_y()
         
-        # 1. Table Header
-        self.set_fill_color(241, 245, 249) # Light Gray
+        self.set_fill_color(241, 245, 249)
         self.rect(10, start_y, 190, 10, 'F')
         self.set_xy(15, start_y + 2)
         self.set_font('Helvetica', 'B', 10)
@@ -235,12 +276,10 @@ class ProReportPDF(FPDF):
         self.cell(30, 6, "Annual Impact", align='R', ln=1)
         self.ln(4)
         
-        # 2. Rows
         y = self.get_y()
         self.set_text_color(15, 23, 42)
         
         for comp in components:
-            # Check for page break
             if self.get_y() > 250:
                 self.add_page()
                 y = 20
@@ -250,30 +289,26 @@ class ProReportPDF(FPDF):
             calcs = sanitize_text(comp.get('calculation_text', ''))
             val = comp.get('savings_value', 0)
             
-            # Label (Col 1)
             self.set_xy(15, y)
             self.set_font('Helvetica', 'B', 9)
             self.multi_cell(85, 5, label, align='L')
             y_end_1 = self.get_y()
             
-            # Calc Logic (Col 2)
             self.set_xy(105, y)
             self.set_font('Helvetica', 'I', 8)
             self.set_text_color(100, 116, 139)
             self.multi_cell(55, 5, calcs, align='L')
             y_end_2 = self.get_y()
             
-            # Value (Col 3)
             self.set_xy(160, y)
             self.set_font('Helvetica', 'B', 10)
-            self.set_text_color(22, 163, 74) # Green
+            self.set_text_color(22, 163, 74)
             self.cell(35, 5, format_currency(val), align='R')
             
             y = max(y_end_1, y_end_2) + 4
             self.set_draw_color(226, 232, 240)
-            self.line(15, y-2, 195, y-2) # Separator line
+            self.line(15, y-2, 195, y-2)
             
-        # 3. Summary Footer
         self.ln(5)
         self.set_xy(120, self.get_y())
         self.set_font('Helvetica', 'B', 12)
@@ -289,10 +324,9 @@ class ProReportPDF(FPDF):
         self.set_text_color(185, 28, 28)
         self.cell(35, 6, f"({format_currency(investment)})", align='R', ln=1)
         
-        # Net
         self.ln(2)
         self.set_xy(120, self.get_y())
-        self.set_fill_color(240, 253, 244) # Green tint
+        self.set_fill_color(240, 253, 244)
         self.rect(120, self.get_y(), 75, 12, 'F')
         self.set_xy(120, self.get_y() + 2)
         self.set_font('Helvetica', 'B', 14)
@@ -429,7 +463,6 @@ def generate_pdf():
             pdf.ln(2)
         pdf.ln(5)
         
-        # New Dynamic Table Draw
         if 'roi_components' in d:
              pdf.draw_financial_table(d['roi_components'], calc['savings'], calc['investment'])
     
