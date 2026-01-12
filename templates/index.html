@@ -21,11 +21,10 @@
     <div class="max-w-4xl mx-auto py-10 px-4">
         <div class="text-center mb-10">
             <h1 class="text-3xl font-bold text-slate-900">Strategic ROI Generator</h1>
-            <p class="text-slate-500">Research & Refine</p>
+            <p class="text-slate-500">Research & Refine (v1.6)</p>
         </div>
 
         <form id="roiForm" action="/generate" method="POST" class="bg-white shadow-xl rounded-xl p-8 border border-slate-200">
-            
             <div class="bg-red-50 p-4 rounded border border-red-100 mb-8">
                 <label class="block text-sm font-bold text-red-700">Access Code</label>
                 <input type="password" name="access_code" required class="w-full border rounded px-3 py-2">
@@ -74,8 +73,7 @@
                         <span>📊 Benchmark Assumptions (Review & Edit)</span>
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
                     </button>
-                    <div id="benchmarkContent" class="accordion-content bg-white p-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                        </div>
+                    <div id="benchmarkContent" class="accordion-content bg-white p-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm"></div>
                 </div>
 
                 <div class="mb-6">
@@ -98,10 +96,18 @@
                             </div>
                             <div>
                                 <label class="block text-xs font-bold text-slate-500 uppercase">Term</label>
-                                <select name="term_{{ product }}" class="w-full border rounded px-2 py-1">
+                                <select name="term_{{ product }}" class="w-full border rounded px-2 py-1" onchange="toggleCustomTerm(this, '{{ product }}')">
                                     <option value="12">1 Year</option>
+                                    <option value="24">2 Years</option>
                                     <option value="36">3 Years</option>
+                                    <option value="48">4 Years</option>
+                                    <option value="60">5 Years</option>
+                                    <option value="other">Custom...</option>
                                 </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold text-slate-500 uppercase">&nbsp;</label>
+                                <input type="number" id="custom_term_{{ product }}" name="term_custom_{{ product }}" placeholder="Months" class="hidden w-full border rounded px-2 py-1 bg-yellow-50">
                             </div>
                         </div>
                     </div>
@@ -135,6 +141,15 @@
             }
         }
         
+        function toggleCustomTerm(select, prodName) {
+            const customInput = document.getElementById('custom_term_' + prodName);
+            if (select.value === 'other') {
+                customInput.classList.remove('hidden');
+            } else {
+                customInput.classList.add('hidden');
+            }
+        }
+        
         function toggleAccordion() {
             document.getElementById('benchmarkContent').classList.toggle('open');
         }
@@ -144,7 +159,6 @@
             const loader = document.getElementById('researchLoading');
             const step2 = document.getElementById('step2');
             
-            // Basic validation
             if(!document.getElementById('client_name').value || !document.getElementById('industry').value) {
                 alert("Please enter Client Name and Industry.");
                 return;
@@ -156,42 +170,31 @@
             const formData = new FormData(document.getElementById('roiForm'));
             
             try {
-                const response = await fetch('/research', {
-                    method: 'POST',
-                    body: formData
-                });
+                const response = await fetch('/research', { method: 'POST', body: formData });
                 const data = await response.json();
                 
                 if (data.success) {
                     loader.classList.add('hidden');
                     step2.classList.remove('hidden');
-                    
-                    // Update Badge
                     document.getElementById('sizeBadge').innerText = `Detected Size: ${data.size_label}`;
                     document.getElementById('size_label_input').value = data.size_label;
                     
-                    // Populate Accordion
                     const container = document.getElementById('benchmarkContent');
-                    container.innerHTML = ''; // Clear
-                    
+                    container.innerHTML = '';
                     for (const [key, val] of Object.entries(data.benchmarks)) {
                         const div = document.createElement('div');
                         const label = key.replace(/_/g, ' ').replace(/(^\w|\s\w)/g, m => m.toUpperCase());
-                        
                         div.innerHTML = `
                             <label class="block text-xs font-bold text-slate-500 mb-1">${label}</label>
                             <input type="text" name="bench_${key}" value="${val}" class="w-full border rounded px-2 py-1 text-slate-700 bg-slate-50 focus:bg-white transition-colors">
                         `;
                         container.appendChild(div);
                     }
-                    
-                    // Auto-fill revenue if found
                     if(data.revenue && !document.getElementById('revenue_input').value) {
                          document.getElementById('revenue_input').value = data.revenue;
                     }
-
                 } else {
-                    alert("Research failed. Please try again.");
+                    alert("Research failed.");
                     btn.classList.remove('hidden');
                     loader.classList.add('hidden');
                 }
@@ -203,7 +206,6 @@
             }
         }
         
-        // Show loader on final submit
         document.getElementById('roiForm').addEventListener('submit', function() {
             document.getElementById('loadingContainer').classList.remove('hidden');
         });
