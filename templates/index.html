@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ROI Generator | Gemini Edition</title>
+    <title>ROI Generator | Research Edition</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         .product-card { transition: all 0.2s; border: 1px solid #e2e8f0; }
@@ -13,7 +13,115 @@
             border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .accordion-content { transition: max-height 0.3s ease-out; max-height: 0; overflow: hidden; }
+        .accordion-content.open { max-height: 1000px; }
     </style>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans">
+    <div class="max-w-4xl mx-auto py-10 px-4">
+        <div class="text-center mb-10">
+            <h1 class="text-3xl font-bold text-slate-900">Strategic ROI Generator</h1>
+            <p class="text-slate-500">Research & Refine</p>
+        </div>
+
+        <form id="roiForm" action="/generate" method="POST" class="bg-white shadow-xl rounded-xl p-8 border border-slate-200">
+            
+            <div class="bg-red-50 p-4 rounded border border-red-100 mb-8">
+                <label class="block text-sm font-bold text-red-700">Access Code</label>
+                <input type="password" name="access_code" required class="w-full border rounded px-3 py-2">
+            </div>
+
+            <div id="step1">
+                <h2 class="text-xl font-bold mb-4 border-b pb-2 text-slate-700">Step 1: Client Research</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                    <div>
+                        <label class="block text-sm font-medium">Client Name</label>
+                        <input type="text" id="client_name" name="client_name" required class="w-full border rounded px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium">Client Website</label>
+                        <input type="url" id="client_url" name="client_url" class="w-full border rounded px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium">Industry</label>
+                        <input type="text" id="industry" name="industry" required class="w-full border rounded px-3 py-2">
+                    </div>
+                    <div>
+                         <label class="block text-sm font-medium">Annual Revenue (Optional)</label>
+                         <input type="text" name="revenue_input" id="revenue_input" placeholder="e.g. 50000000" class="w-full border rounded px-3 py-2">
+                         <p class="text-xs text-slate-400">Leave blank to auto-detect via Tavily</p>
+                    </div>
+                </div>
+                <button type="button" onclick="runResearch()" id="researchBtn" class="bg-indigo-600 text-white font-bold py-3 px-8 rounded hover:bg-indigo-700 w-full">
+                    Run Research
+                </button>
+            </div>
+
+            <div id="researchLoading" class="hidden text-center py-8">
+                <div class="inline-block spinner border-slate-400 border-t-indigo-600 mb-2"></div>
+                <p class="text-slate-600">Analyzing Market Data...</p>
+            </div>
+
+            <div id="step2" class="hidden mt-8 border-t pt-8">
+                <div class="flex justify-between items-center mb-6">
+                     <h2 class="text-xl font-bold text-slate-700">Step 2: Solution Configuration</h2>
+                     <span id="sizeBadge" class="bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-0.5 rounded">Detected Size: Loading...</span>
+                     <input type="hidden" name="size_label" id="size_label_input">
+                </div>
+
+                <div class="mb-8 border rounded-lg">
+                    <button type="button" onclick="toggleAccordion()" class="w-full flex justify-between items-center p-4 bg-slate-50 hover:bg-slate-100 font-medium text-left">
+                        <span>📊 Benchmark Assumptions (Review & Edit)</span>
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                    </button>
+                    <div id="benchmarkContent" class="accordion-content bg-white p-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                        </div>
+                </div>
+
+                <div class="mb-6">
+                    <label class="block text-sm font-medium">Problem Statement</label>
+                    <textarea name="problem_statement" class="w-full border rounded px-3 py-2 h-24" placeholder="Describe the specific pain point..."></textarea>
+                </div>
+
+                <h3 class="font-bold mb-4 text-slate-600">Select Products</h3>
+                <div class="grid grid-cols-1 gap-4 mb-8">
+                    {% for product in products %}
+                    <div id="card_{{ product }}" class="product-card rounded-lg p-4">
+                        <label class="flex items-center cursor-pointer">
+                            <input type="checkbox" name="products" value="{{ product }}" class="w-5 h-5 text-blue-600" onchange="toggleCard(this, '{{ product }}')">
+                            <span class="ml-3 font-semibold text-lg">{{ product }}</span>
+                        </label>
+                        <div id="details_{{ product }}" class="hidden mt-4 pl-8 grid grid-cols-1 md:grid-cols-3 gap-4 border-t pt-4">
+                            <div>
+                                <label class="block text-xs font-bold text-slate-500 uppercase">Monthly Cost ($)</label>
+                                <input type="number" name="cost_{{ product }}" placeholder="0.00" class="w-full border rounded px-2 py-1">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold text-slate-500 uppercase">Term</label>
+                                <select name="term_{{ product }}" class="w-full border rounded px-2 py-1">
+                                    <option value="12">1 Year</option>
+                                    <option value="36">3 Years</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <div class="flex justify-center gap-4">
+                    <button type="submit" class="bg-green-600 text-white font-bold py-3 px-8 rounded hover:bg-green-700 w-full md:w-auto">
+                        Generate Final Report
+                    </button>
+                </div>
+            </div>
+            
+             <div id="loadingContainer" class="hidden text-center py-4 mt-4">
+                <div class="inline-block spinner border-slate-400 border-t-green-600 mb-2"></div>
+                <p class="text-slate-600">Generating Forensic Analysis...</p>
+            </div>
+        </form>
+    </div>
+
     <script>
         function toggleCard(checkbox, prodName) {
             const card = document.getElementById('card_' + prodName);
@@ -26,114 +134,79 @@
                 details.classList.add('hidden');
             }
         }
+        
+        function toggleAccordion() {
+            document.getElementById('benchmarkContent').classList.toggle('open');
+        }
 
-        function toggleCustomTerm(select, prodName) {
-            const customInput = document.getElementById('custom_term_' + prodName);
-            if (select.value === 'other') {
-                customInput.classList.remove('hidden');
-            } else {
-                customInput.classList.add('hidden');
+        async function runResearch() {
+            const btn = document.getElementById('researchBtn');
+            const loader = document.getElementById('researchLoading');
+            const step2 = document.getElementById('step2');
+            
+            // Basic validation
+            if(!document.getElementById('client_name').value || !document.getElementById('industry').value) {
+                alert("Please enter Client Name and Industry.");
+                return;
+            }
+
+            btn.classList.add('hidden');
+            loader.classList.remove('hidden');
+
+            const formData = new FormData(document.getElementById('roiForm'));
+            
+            try {
+                const response = await fetch('/research', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    loader.classList.add('hidden');
+                    step2.classList.remove('hidden');
+                    
+                    // Update Badge
+                    document.getElementById('sizeBadge').innerText = `Detected Size: ${data.size_label}`;
+                    document.getElementById('size_label_input').value = data.size_label;
+                    
+                    // Populate Accordion
+                    const container = document.getElementById('benchmarkContent');
+                    container.innerHTML = ''; // Clear
+                    
+                    for (const [key, val] of Object.entries(data.benchmarks)) {
+                        const div = document.createElement('div');
+                        const label = key.replace(/_/g, ' ').replace(/(^\w|\s\w)/g, m => m.toUpperCase());
+                        
+                        div.innerHTML = `
+                            <label class="block text-xs font-bold text-slate-500 mb-1">${label}</label>
+                            <input type="text" name="bench_${key}" value="${val}" class="w-full border rounded px-2 py-1 text-slate-700 bg-slate-50 focus:bg-white transition-colors">
+                        `;
+                        container.appendChild(div);
+                    }
+                    
+                    // Auto-fill revenue if found
+                    if(data.revenue && !document.getElementById('revenue_input').value) {
+                         document.getElementById('revenue_input').value = data.revenue;
+                    }
+
+                } else {
+                    alert("Research failed. Please try again.");
+                    btn.classList.remove('hidden');
+                    loader.classList.add('hidden');
+                }
+            } catch (error) {
+                console.error(error);
+                alert("An error occurred.");
+                btn.classList.remove('hidden');
+                loader.classList.add('hidden');
             }
         }
-
-        function setModeAndSubmit(mode) {
-            document.getElementById('modeField').value = mode;
-            document.getElementById('btnContainer').classList.add('hidden');
+        
+        // Show loader on final submit
+        document.getElementById('roiForm').addEventListener('submit', function() {
             document.getElementById('loadingContainer').classList.remove('hidden');
-            document.getElementById('loadingText').innerText = mode === 'beta' ? "Building Gemini Preview..." : "Generating Gemini Analysis...";
-            document.getElementById('roiForm').submit();
-        }
+        });
     </script>
-</head>
-<body class="bg-slate-50 text-slate-800 font-sans">
-    <div class="max-w-4xl mx-auto py-10 px-4">
-        <div class="text-center mb-10">
-            <h1 class="text-3xl font-bold text-slate-900">Strategic ROI Generator</h1>
-            <p class="text-slate-500">Powered by Google Gemini</p>
-        </div>
-
-        <form id="roiForm" action="/generate" method="POST" class="bg-white shadow-xl rounded-xl p-8 border border-slate-200">
-            <input type="hidden" name="mode" id="modeField" value="live">
-
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-                <div class="bg-red-50 p-4 rounded border border-red-100 col-span-1 md:col-span-2">
-                    <label class="block text-sm font-bold text-red-700">Access Code</label>
-                    <input type="password" name="access_code" required class="w-full border rounded px-3 py-2">
-                </div>
-                <div>
-                    <label class="block text-sm font-medium">Client Name</label>
-                    <input type="text" name="client_name" required class="w-full border rounded px-3 py-2">
-                </div>
-                <div>
-                    <label class="block text-sm font-medium">Client Website</label>
-                    <input type="url" name="client_url" class="w-full border rounded px-3 py-2">
-                </div>
-                <div>
-                    <label class="block text-sm font-medium">Industry</label>
-                    <input type="text" name="industry" required class="w-full border rounded px-3 py-2">
-                </div>
-                <div>
-                    <label class="block text-sm font-medium">Focus Area</label>
-                    <select name="project_type" class="w-full border rounded px-3 py-2 bg-white">
-                        <option value="Operational Efficiency">Operational Efficiency</option>
-                        <option value="Migration">Cloud Migration</option>
-                        <option value="CX">CX Transformation</option>
-                        <option value="DevOps">DevOps Automation</option>
-                    </select>
-                </div>
-                <div class="col-span-1 md:col-span-2">
-                    <label class="block text-sm font-medium">Problem Statement</label>
-                    <textarea name="problem_statement" class="w-full border rounded px-3 py-2 h-20" placeholder="e.g. We are spending too much on manual testing..."></textarea>
-                </div>
-            </div>
-
-            <h2 class="text-xl font-bold mb-4 border-b pb-2">Solution Configuration</h2>
-            <div class="grid grid-cols-1 gap-4 mb-8">
-                {% for product in products %}
-                <div id="card_{{ product }}" class="product-card rounded-lg p-4">
-                    <label class="flex items-center cursor-pointer">
-                        <input type="checkbox" name="products" value="{{ product }}" class="w-5 h-5 text-blue-600" onchange="toggleCard(this, '{{ product }}')">
-                        <span class="ml-3 font-semibold text-lg">{{ product }}</span>
-                    </label>
-                    
-                    <div id="details_{{ product }}" class="hidden mt-4 pl-8 grid grid-cols-1 md:grid-cols-3 gap-4 border-t pt-4">
-                        <div>
-                            <label class="block text-xs font-bold text-slate-500 uppercase">Monthly Cost ($)</label>
-                            <input type="number" name="cost_{{ product }}" placeholder="0.00" class="w-full border rounded px-2 py-1">
-                        </div>
-                        <div>
-                            <label class="block text-xs font-bold text-slate-500 uppercase">Term Length</label>
-                            <select name="term_{{ product }}" class="w-full border rounded px-2 py-1" onchange="toggleCustomTerm(this, '{{ product }}')">
-                                <option value="12">1 Year</option>
-                                <option value="24">2 Years</option>
-                                <option value="36">3 Years</option>
-                                <option value="1">1 Month</option>
-                                <option value="other">Custom...</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="block text-xs font-bold text-slate-500 uppercase">&nbsp;</label>
-                            <input type="number" step="0.25" id="custom_term_{{ product }}" name="term_custom_{{ product }}" placeholder="Months" class="hidden w-full border rounded px-2 py-1 bg-yellow-50">
-                        </div>
-                    </div>
-                </div>
-                {% endfor %}
-            </div>
-
-            <div class="flex justify-center gap-4 border-t pt-6" id="btnContainer">
-                <button type="button" onclick="setModeAndSubmit('beta')" class="bg-amber-500 text-white font-bold py-3 px-8 rounded hover:bg-amber-600">
-                    Beta Test (Free)
-                </button>
-                <button type="button" onclick="setModeAndSubmit('live')" class="bg-blue-600 text-white font-bold py-3 px-8 rounded hover:bg-blue-700">
-                    Generate Report
-                </button>
-            </div>
-            
-            <div id="loadingContainer" class="hidden text-center py-4">
-                <div class="inline-block spinner border-slate-400 border-t-blue-600 mb-2"></div>
-                <p id="loadingText" class="text-slate-600 font-medium">Processing...</p>
-            </div>
-        </form>
-    </div>
 </body>
 </html>
