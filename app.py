@@ -154,17 +154,19 @@ class ProReportPDF(FPDF):
         self.cell(w, 5, sanitize_text(subtext), align='C')
 
     def draw_financial_table(self, components, total_savings, investment):
-        """Dynamic Table drawing that prevents overlap with robust row height calculation"""
+        """Dynamic Table drawing with full row synchronization"""
         self.set_y(self.get_y() + 5)
         
         # Header
         self.set_fill_color(240, 240, 240)
         self.set_font(FONT_FAMILY, 'B', 10)
         self.set_text_color(*COLOR_PRIMARY)
+        self.set_draw_color(200, 200, 200) # Light grey border
         
-        col_1_w = 40  # Value Driver
-        col_2_w = 110 # Basis
-        col_3_w = 35  # Impact
+        col_1_w = 45  # Value Driver (Wider)
+        col_2_w = 105 # Basis
+        col_3_w = 40  # Impact
+        line_height = 5
         
         self.cell(col_1_w, 8, "Value Driver", 1, 0, 'L', 1)
         self.cell(col_2_w, 8, "Basis of Calculation", 1, 0, 'L', 1)
@@ -173,60 +175,61 @@ class ProReportPDF(FPDF):
         self.set_font(FONT_FAMILY, '', 9)
         self.set_text_color(0, 0, 0)
         
-        # Iterate Rows
         for d in components:
-            # 1. Calculate Content
+            # 1. Get Text
             label_text = sanitize_text(d.get('label', 'Savings'))
             basis_text = sanitize_text(d.get('calculation_text', ''))
             val = d.get('savings_value', 0)
+            impact_text = f"${val:,.0f}"
+
+            # 2. Calculate Height based on BOTH columns
+            # Calculate lines for Col 1
+            lines_1 = self.multi_cell(col_1_w, line_height, label_text, split_only=True)
+            n_lines_1 = max(len(lines_1), 1)
             
-            # 2. Determine Height needed for the middle column (the longest text)
-            # FPDF's multi_cell returns a list of lines if we use split_only=True,
-            # but standard FPDF doesn't always support this. 
-            # We will use a reliable heuristic: Get string width and divide by column width.
+            # Calculate lines for Col 2
+            lines_2 = self.multi_cell(col_2_w, line_height, basis_text, split_only=True)
+            n_lines_2 = max(len(lines_2), 1)
             
-            # Save current position
-            x_start = self.get_x()
-            y_start = self.get_y()
+            # Max lines determines the row height for ALL columns
+            max_lines = max(n_lines_1, n_lines_2)
+            row_height = max_lines * line_height
             
-            # Simulate the MultiCell height
-            # 5 is the line height. We calculate how many lines the text needs.
-            # We add a small buffer (2) to string length for safety.
-            text_width = self.get_string_width(basis_text)
-            lines_needed = int(text_width / (col_2_w - 4)) + 1
-            # Hard return count
-            hard_returns = basis_text.count('\n')
-            total_lines = lines_needed + hard_returns
-            
-            row_height = total_lines * 5 
-            if row_height < 10: row_height = 10 # Minimum height
-            
+            # Minimum padding
+            row_height = max(row_height, 10) 
+
             # Check Page Break
             if self.get_y() + row_height > 250:
                 self.add_page()
-                y_start = self.get_y() # Reset Y after new page
+                # Re-draw header if needed (Optional)
             
-            # 3. Draw Cells
+            # 3. Draw Cells (Text First, then Borders)
+            x_start = self.get_x()
+            y_start = self.get_y()
+
+            # Col 1: Value Driver (Wrapped Text)
+            self.multi_cell(col_1_w, line_height, label_text, 0, 'L') 
+            self.set_xy(x_start + col_1_w, y_start) # Move right
+
+            # Col 2: Basis (Wrapped Text)
+            self.multi_cell(col_2_w, line_height, basis_text, 0, 'L') 
+            self.set_xy(x_start + col_1_w + col_2_w, y_start) # Move right
+
+            # Col 3: Impact (Standard Cell)
+            self.cell(col_3_w, line_height, impact_text, 0, 1, 'R') 
             
-            # Col 1 (Label) - Bordered
-            self.set_xy(10, y_start)
-            self.cell(col_1_w, row_height, label_text, 1, 0, 'L')
+            # 4. Draw Grid Borders (Overlay Rectangles)
+            # This ensures equal height borders even if text is short
+            self.set_xy(x_start, y_start)
+            self.rect(x_start, y_start, col_1_w, row_height)
+            self.rect(x_start + col_1_w, y_start, col_2_w, row_height)
+            self.rect(x_start + col_1_w + col_2_w, y_start, col_3_w, row_height)
             
-            # Col 2 (Basis) - MultiCell
-            # We need to print this carefully. We set xy, print, then reset xy.
-            self.set_xy(10 + col_1_w, y_start)
-            self.multi_cell(col_2_w, 5, basis_text, 1, 'L')
-            
-            # Col 3 (Impact) - Bordered
-            self.set_xy(10 + col_1_w + col_2_w, y_start)
-            self.cell(col_3_w, row_height, f"${val:,.0f}", 1, 1, 'R')
-            
-            # 4. Advance Y position for next row
+            # 5. Advance Y to the next row
             self.set_y(y_start + row_height)
 
-        # Totals Block (Safely positioned with padding)
-        self.ln(5) # Add padding between table and totals
-        
+        # Totals Block
+        self.ln(5)
         # Check if we need a page break for totals
         if self.get_y() + 30 > 250:
             self.add_page()
