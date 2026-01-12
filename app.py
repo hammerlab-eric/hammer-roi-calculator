@@ -9,6 +9,7 @@ import re
 from flask import Flask, render_template, request, send_file, jsonify
 from fpdf import FPDF
 import matplotlib
+# Set non-GUI backend to prevent server errors
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
@@ -34,14 +35,16 @@ ACCESS_CODE = os.getenv("ACCESS_CODE", "Hammer2025!")
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
 
+# Lock for thread-safe plotting
 plot_lock = threading.Lock()
 
-# --- UTILS ---
-COLOR_PRIMARY = (15, 23, 42)    
-COLOR_ACCENT = (37, 99, 235)    
-COLOR_TEXT = (51, 65, 85)       
+# --- STYLING CONSTANTS ---
+COLOR_PRIMARY = (15, 23, 42)    # Navy
+COLOR_ACCENT = (37, 99, 235)    # Blue
+COLOR_TEXT = (51, 65, 85)       # Slate
 FONT_FAMILY = 'Helvetica'
 
+# --- UTILS ---
 def sanitize_text(text):
     if not isinstance(text, str): return str(text)
     replacements = {'\u2013': '-', '\u2014': '--', '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"', '\u2026': '...', '\u00a0': ' ', '\u2022': '+', '•': '+', '$': ''} 
@@ -56,37 +59,47 @@ def format_currency(value):
     except: return "$0"
 
 def extract_currency_value(text_value):
+    """Defensive cleaner for AI outputs"""
     if not text_value: return 0.0
     clean_text = str(text_value).strip().replace('$', '').replace(',', '')
     multiplier = 1.0
     if clean_text.lower().endswith('k'): multiplier = 1000.0; clean_text = clean_text[:-1]
     elif clean_text.lower().endswith('m'): multiplier = 1000000.0; clean_text = clean_text[:-1]
+    
     try:
         matches = re.findall(r"[-+]?\d*\.\d+|\d+", clean_text)
         if matches: return max([float(m) for m in matches]) * multiplier
         return 0.0
     except: return 0.0
 
+# --- CHART GENERATOR ---
 def create_payback_chart(investment, annual_savings):
     with plot_lock:
         plt.style.use('seaborn-v0_8-whitegrid')
         fig, ax = plt.subplots(figsize=(7, 3.5))
+        
         months = list(range(13))
         start_val = -1 * abs(investment)
         monthly_gain = (annual_savings / 12.0) if annual_savings else 0
+        
         cash_flow = []
         current = start_val
         for m in months:
             cash_flow.append(current)
             current += monthly_gain
+            
         ax.plot(months, cash_flow, color='#2563EB', linewidth=3, marker='o', markersize=6)
         ax.axhline(0, color='#64748B', linewidth=1.5, linestyle='--')
+        
         ax.set_title("Cumulative Cash Flow (Year 1)", fontsize=12, fontweight='bold', pad=15)
         ax.set_xlabel("Months", fontsize=9)
         ax.set_ylabel("Net Cash Position ($)", fontsize=9)
+        
+        # Format Y axis
         fmt = '${x:,.0f}'
         tick = mtick.StrMethodFormatter(fmt)
         ax.yaxis.set_major_formatter(tick)
+        
         buf = io.BytesIO()
         plt.savefig(buf, format='png', bbox_inches='tight', dpi=150)
         plt.close()
@@ -141,7 +154,7 @@ class ProReportPDF(FPDF):
         self.cell(w, 5, sanitize_text(subtext), align='C')
 
     def draw_financial_table(self, components, total_savings, investment):
-        """Dynamic Table drawing that prevents overlap"""
+        """Dynamic Table drawing that prevents overlap with robust row height calculation"""
         self.set_y(self.get_y() + 5)
         
         # Header
@@ -162,38 +175,62 @@ class ProReportPDF(FPDF):
         
         # Iterate Rows
         for d in components:
-            # Calculate height based on the text length of the middle column
+            # 1. Calculate Content
+            label_text = sanitize_text(d.get('label', 'Savings'))
             basis_text = sanitize_text(d.get('calculation_text', ''))
-            # Get number of lines this text will take in col_2_w
-            # FPDF trick: multi_cell with split_only=True returns the lines
-            lines = self.multi_cell(col_2_w, 5, basis_text, split_only=True)
-            num_lines = max(len(lines), 1)
-            row_height = num_lines * 5
+            val = d.get('savings_value', 0)
             
-            # Ensure page break if needed
-            if self.get_y() + row_height > 250:
-                self.add_page()
+            # 2. Determine Height needed for the middle column (the longest text)
+            # FPDF's multi_cell returns a list of lines if we use split_only=True,
+            # but standard FPDF doesn't always support this. 
+            # We will use a reliable heuristic: Get string width and divide by column width.
             
+            # Save current position
             x_start = self.get_x()
             y_start = self.get_y()
             
-            # Col 1
-            self.cell(col_1_w, row_height, sanitize_text(d.get('label', 'Savings')), 1, 0, 'L')
+            # Simulate the MultiCell height
+            # 5 is the line height. We calculate how many lines the text needs.
+            # We add a small buffer (2) to string length for safety.
+            text_width = self.get_string_width(basis_text)
+            lines_needed = int(text_width / (col_2_w - 4)) + 1
+            # Hard return count
+            hard_returns = basis_text.count('\n')
+            total_lines = lines_needed + hard_returns
             
-            # Col 2 (MultiCell)
-            self.set_xy(x_start + col_1_w, y_start)
+            row_height = total_lines * 5 
+            if row_height < 10: row_height = 10 # Minimum height
+            
+            # Check Page Break
+            if self.get_y() + row_height > 250:
+                self.add_page()
+                y_start = self.get_y() # Reset Y after new page
+            
+            # 3. Draw Cells
+            
+            # Col 1 (Label) - Bordered
+            self.set_xy(10, y_start)
+            self.cell(col_1_w, row_height, label_text, 1, 0, 'L')
+            
+            # Col 2 (Basis) - MultiCell
+            # We need to print this carefully. We set xy, print, then reset xy.
+            self.set_xy(10 + col_1_w, y_start)
             self.multi_cell(col_2_w, 5, basis_text, 1, 'L')
             
-            # Col 3
-            self.set_xy(x_start + col_1_w + col_2_w, y_start)
-            val = d.get('savings_value', 0)
+            # Col 3 (Impact) - Bordered
+            self.set_xy(10 + col_1_w + col_2_w, y_start)
             self.cell(col_3_w, row_height, f"${val:,.0f}", 1, 1, 'R')
             
-            # Move to next row
+            # 4. Advance Y position for next row
             self.set_y(y_start + row_height)
 
-        # Totals Block (Safely positioned below the last row)
-        self.ln(2)
+        # Totals Block (Safely positioned with padding)
+        self.ln(5) # Add padding between table and totals
+        
+        # Check if we need a page break for totals
+        if self.get_y() + 30 > 250:
+            self.add_page()
+
         self.set_font(FONT_FAMILY, 'B', 10)
         self.set_x(10 + col_1_w + col_2_w) 
         self.set_text_color(*COLOR_PRIMARY)
@@ -209,22 +246,30 @@ class ProReportPDF(FPDF):
         self.cell(col_3_w, 8, f"NET VALUE: ${net_val:,.0f}", 'T', 1, 'R')
         self.ln(10)
 
+# --- GEMINI AGENT ---
 def run_gemini_agent(agent_role, model_name, prompt):
     try:
         model = genai.GenerativeModel(
             model_name,
             system_instruction=f"You are a specialized agent: {agent_role}. Return strictly valid JSON."
         )
-        response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
+        response = model.generate_content(
+            prompt, 
+            generation_config={"response_mime_type": "application/json"}
+        )
         return json.loads(response.text)
     except Exception as e:
-        print(f"Gemini Error: {e}")
+        print(f"ERROR: {model_name} failed: {e}")
         return None
 
 def extract_revenue_from_context(client_name, search_text):
     if not search_text: return None
-    prompt = f"CONTEXT: {search_text}\nTASK: Identify annual revenue for {client_name}. Return integer (e.g. 50000000). Return null if not found.\nOUTPUT JSON: {{ \"annual_revenue\": (Number or null) }}"
-    result = run_gemini_agent("Revenue Scout", "gemini-2.0-flash-exp", prompt)
+    prompt = f"""
+    CONTEXT: {search_text}
+    TASK: Identify annual revenue for {client_name}. Return integer (e.g. 50000000). Return null if not found.
+    OUTPUT JSON: {{ "annual_revenue": (Number or null) }}
+    """
+    result = run_gemini_agent("Revenue Scout", "gemini-2.5-flash", prompt)
     if result and result.get("annual_revenue"): return result["annual_revenue"]
     return None
 
@@ -262,7 +307,10 @@ SELECTOR_LOGIC = {
     }
 }
 
-def process_single_product(prod, client_name, industry, problem_statement, profile_data, size_label):
+def process_single_product(prod, client_name, industry, problem_statement, profile_data, size_label, beta_mode):
+    if beta_mode:
+        return prod, {"impact": "BETA PREVIEW", "bullets": ["Beta"], "roi_components": []}
+
     product_rules = {}
     for key in SELECTOR_LOGIC.keys():
         if key.lower() in prod.lower():
@@ -273,8 +321,13 @@ def process_single_product(prod, client_name, industry, problem_statement, profi
     manual_text = PRODUCT_MANUALS.get(prod, "")
     if len(manual_text) > 3000: manual_text = manual_text[:3000] + "...(truncated)"
 
-    triage_prompt = f"CLIENT: {client_name}\nPROBLEM: \"{problem_statement}\"\nTASK: Select ONE 'Usage Scenario' for {prod}.\nOutput JSON ONLY: {{ \"selected_scenario_name\": \"...\" }}"
-    triage_result = run_gemini_agent("Triage Doctor", "gemini-2.0-flash-exp", triage_prompt)
+    triage_prompt = f"""
+    CLIENT: {client_name}
+    PROBLEM: "{problem_statement}"
+    TASK: Select the ONE 'Usage Scenario' name for {prod}.
+    Output JSON ONLY: {{ "selected_scenario_name": "Name of scenario", "reasoning": "Why it fits" }}
+    """
+    triage_result = run_gemini_agent("Triage Doctor", "gemini-2.5-flash", triage_prompt)
     scenario = triage_result.get("selected_scenario_name", "Standard ROI") if triage_result else "Standard ROI"
 
     cfo_prompt = f"""
@@ -302,7 +355,7 @@ def process_single_product(prod, client_name, industry, problem_statement, profi
        ]
     }}
     """
-    cfo_result = run_gemini_agent("CFO Analyst", "gemini-2.0-flash-exp", cfo_prompt)
+    cfo_result = run_gemini_agent("CFO Analyst", "gemini-2.5-pro", cfo_prompt)
     return prod, (cfo_result if cfo_result else PRODUCT_DATA.get(prod, {}))
 
 @app.route('/')
@@ -314,8 +367,8 @@ def research_client():
     client = request.form.get('client_name')
     url = request.form.get('client_url')
     ind = request.form.get('industry')
-    tavily_resp = {"context": "", "revenue_est": None}
     
+    tavily_resp = {"context": "", "revenue_est": None}
     if TAVILY_API_KEY:
         try:
             tavily = TavilyClient(api_key=TAVILY_API_KEY)
@@ -363,7 +416,7 @@ def generate_pdf():
     results = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
         future_to_prod = {
-            executor.submit(process_single_product, p, client, ind, prob, custom_profile, size_label): p 
+            executor.submit(process_single_product, p, client, ind, prob, custom_profile, size_label, False): p 
             for p in prods
         }
         for future in concurrent.futures.as_completed(future_to_prod):
@@ -399,6 +452,7 @@ def generate_pdf():
 
     pdf = ProReportPDF()
     pdf.set_auto_page_break(True, 15)
+    
     pdf.add_page()
     pdf.ln(5)
     pdf.set_font(FONT_FAMILY, 'B', 24)
@@ -408,6 +462,7 @@ def generate_pdf():
     pdf.set_text_color(100, 116, 139)
     pdf.cell(0, 8, f"Prepared for: {client}", ln=True)
     pdf.ln(10)
+    
     pdf.set_fill_color(241, 245, 249)
     pdf.rect(10, pdf.get_y(), 190, 25, 'F')
     pdf.set_xy(15, pdf.get_y()+5)
@@ -431,12 +486,15 @@ def generate_pdf():
         if p not in results: continue
         d = results[p]
         calc = roi_data.get(p, {'savings':0, 'investment':0, 'components':[]})
+        
         pdf.add_page()
         pdf.chapter_title(f"Analysis: {p}")
+        
         pdf.set_font(FONT_FAMILY, 'I', 11)
         pdf.set_text_color(51, 65, 85)
         pdf.multi_cell(0, 6, sanitize_text(d.get('impact', '')))
         pdf.ln(8)
+        
         pdf.set_font(FONT_FAMILY, '', 10)
         pdf.set_text_color(15, 23, 42)
         for b in d.get('bullets', []):
@@ -445,6 +503,7 @@ def generate_pdf():
             pdf.multi_cell(170, 6, sanitize_text(b))
             pdf.ln(2)
         pdf.ln(5)
+        
         if 'roi_components' in d:
              pdf.draw_financial_table(d['roi_components'], calc['savings'], calc['investment'])
     
@@ -454,11 +513,13 @@ def generate_pdf():
     pdf.set_font(FONT_FAMILY, '', 10)
     pdf.multi_cell(0, 5, f"Analysis metrics derived from '{ind}' industry profile for a {size_label} organization:")
     pdf.ln(5)
+    
     col_w, row_h = 90, 8
     pdf.set_font(FONT_FAMILY, 'B', 9)
     pdf.cell(col_w, row_h, "Metric", 1, 0, 'L', 1)
     pdf.cell(col_w, row_h, "Value Used", 1, 1, 'L', 1)
     pdf.set_font(FONT_FAMILY, '', 9)
+    
     for cat, metrics in custom_profile.items():
         for k, v in metrics.items():
             label = k.replace("_", " ").title()
@@ -468,6 +529,7 @@ def generate_pdf():
 
     try: pdf_out = pdf.output(dest='S').encode('latin-1') 
     except: pdf_out = bytes(pdf.output()) 
+
     return send_file(io.BytesIO(pdf_out), as_attachment=True, download_name=f"ROI_Analysis_{client}.pdf", mimetype="application/pdf")
 
 if __name__ == '__main__':
