@@ -3,14 +3,20 @@ import io
 import json
 import logging
 import concurrent.futures
+import threading
+import re
+
 from flask import Flask, render_template, request, send_file, jsonify
 from fpdf import FPDF
+import matplotlib
+# Set non-GUI backend to prevent server errors
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
 from tavily import TavilyClient
 import google.generativeai as genai
 
-# Import Data
+# --- DATA IMPORTS ---
 try:
     from knowledge_base import PRODUCT_DATA, PRODUCT_MANUALS
 except ImportError:
@@ -18,11 +24,6 @@ except ImportError:
     PRODUCT_MANUALS = {}
 
 import benchmarks 
-
-import matplotlib
-matplotlib.use('Agg')
-import threading
-plot_lock = threading.Lock()
 
 app = Flask(__name__)
 
@@ -33,6 +34,15 @@ ACCESS_CODE = os.getenv("ACCESS_CODE", "Hammer2025!")
 
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
+
+# Lock for thread-safe plotting
+plot_lock = threading.Lock()
+
+# --- STYLING CONSTANTS ---
+COLOR_PRIMARY = (15, 23, 42)    # Navy
+COLOR_ACCENT = (37, 99, 235)    # Blue
+COLOR_TEXT = (51, 65, 85)       # Slate
+FONT_FAMILY = 'Helvetica'
 
 # --- UTILS ---
 def sanitize_text(text):
@@ -51,7 +61,6 @@ def format_currency(value):
 def extract_currency_value(text_value):
     """Defensive cleaner for AI outputs"""
     if not text_value: return 0.0
-    import re
     clean_text = str(text_value).strip().replace('$', '').replace(',', '')
     multiplier = 1.0
     if clean_text.lower().endswith('k'): multiplier = 1000.0; clean_text = clean_text[:-1]
@@ -62,6 +71,159 @@ def extract_currency_value(text_value):
         if matches: return max([float(m) for m in matches]) * multiplier
         return 0.0
     except: return 0.0
+
+# --- CHART GENERATOR ---
+def create_payback_chart(investment, annual_savings):
+    with plot_lock:
+        plt.style.use('seaborn-v0_8-whitegrid')
+        fig, ax = plt.subplots(figsize=(7, 3.5))
+        
+        months = list(range(13))
+        start_val = -1 * abs(investment)
+        monthly_gain = (annual_savings / 12.0) if annual_savings else 0
+        
+        cash_flow = []
+        current = start_val
+        for m in months:
+            cash_flow.append(current)
+            current += monthly_gain
+            
+        ax.plot(months, cash_flow, color='#2563EB', linewidth=3, marker='o', markersize=6)
+        ax.axhline(0, color='#64748B', linewidth=1.5, linestyle='--')
+        
+        ax.set_title("Cumulative Cash Flow (Year 1)", fontsize=12, fontweight='bold', pad=15)
+        ax.set_xlabel("Months", fontsize=9)
+        ax.set_ylabel("Net Cash Position ($)", fontsize=9)
+        
+        # Format Y axis
+        fmt = '${x:,.0f}'
+        tick = mtick.StrMethodFormatter(fmt)
+        ax.yaxis.set_major_formatter(tick)
+        
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', bbox_inches='tight', dpi=150)
+        plt.close()
+        buf.seek(0)
+        return buf
+
+# --- PDF CLASS ---
+class ProReportPDF(FPDF):
+    def header(self):
+        self.set_fill_color(*COLOR_PRIMARY)
+        self.rect(0, 0, 210, 20, 'F')
+        self.set_y(5)
+        self.set_font(FONT_FAMILY, 'B', 12)
+        self.set_text_color(255, 255, 255)
+        self.cell(10)
+        self.cell(0, 10, 'STRATEGIC VALUE ANALYSIS', ln=0, align='L')
+        self.set_font(FONT_FAMILY, '', 9)
+        self.cell(0, 10, 'CONFIDENTIAL PREVIEW', ln=1, align='R')
+        self.ln(10)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font(FONT_FAMILY, 'I', 8)
+        self.set_text_color(150, 150, 150)
+        self.cell(0, 10, f'Page {self.page_no()}', align='C')
+
+    def chapter_title(self, title):
+        self.set_font(FONT_FAMILY, 'B', 16)
+        self.set_text_color(*COLOR_PRIMARY)
+        self.cell(0, 8, sanitize_text(title), ln=True, align='L')
+        self.set_draw_color(*COLOR_ACCENT)
+        self.set_line_width(0.5)
+        self.line(10, self.get_y()+2, 200, self.get_y()+2)
+        self.ln(10)
+
+    def card_box(self, label, value, subtext, x, y, w, h):
+        self.set_xy(x, y)
+        self.set_fill_color(248, 250, 252)
+        self.set_draw_color(226, 232, 240)
+        self.rect(x, y, w, h, 'DF')
+        self.set_xy(x, y + 5)
+        self.set_font(FONT_FAMILY, 'B', 14)
+        self.set_text_color(*COLOR_ACCENT)
+        self.cell(w, 10, sanitize_text(value), align='C', ln=1)
+        self.set_xy(x, y + 16)
+        self.set_font(FONT_FAMILY, 'B', 9)
+        self.set_text_color(*COLOR_TEXT)
+        self.cell(w, 5, sanitize_text(label), align='C', ln=1)
+        self.set_xy(x, y + 22)
+        self.set_font(FONT_FAMILY, '', 7)
+        self.set_text_color(100, 116, 139)
+        self.cell(w, 5, sanitize_text(subtext), align='C')
+
+    def draw_financial_table(self, components, total_savings, investment):
+        start_y = self.get_y()
+        self.set_fill_color(241, 245, 249)
+        self.rect(10, start_y, 190, 10, 'F')
+        self.set_xy(15, start_y + 2)
+        self.set_font(FONT_FAMILY, 'B', 10)
+        self.set_text_color(71, 85, 105)
+        self.cell(90, 6, "Value Driver", ln=0)
+        self.cell(60, 6, "Basis of Calculation", ln=0)
+        self.cell(30, 6, "Annual Impact", align='R', ln=1)
+        self.ln(4)
+        
+        y = self.get_y()
+        self.set_text_color(15, 23, 42)
+        
+        for comp in components:
+            if self.get_y() > 250:
+                self.add_page()
+                y = 20
+                self.set_y(y)
+            
+            label = sanitize_text(comp.get('label', 'Savings'))
+            calcs = sanitize_text(comp.get('calculation_text', ''))
+            val = comp.get('savings_value', 0)
+            
+            self.set_xy(15, y)
+            self.set_font(FONT_FAMILY, 'B', 9)
+            self.multi_cell(85, 5, label, align='L')
+            y_end_1 = self.get_y()
+            
+            self.set_xy(105, y)
+            self.set_font(FONT_FAMILY, 'I', 8)
+            self.set_text_color(100, 116, 139)
+            self.multi_cell(55, 5, calcs, align='L')
+            y_end_2 = self.get_y()
+            
+            self.set_xy(160, y)
+            self.set_font(FONT_FAMILY, 'B', 10)
+            self.set_text_color(22, 163, 74)
+            self.cell(35, 5, format_currency(val), align='R')
+            
+            y = max(y_end_1, y_end_2) + 4
+            self.set_draw_color(226, 232, 240)
+            self.line(15, y-2, 195, y-2)
+            
+        self.ln(5)
+        self.set_xy(120, self.get_y())
+        self.set_font(FONT_FAMILY, 'B', 12)
+        self.set_text_color(15, 23, 42)
+        self.cell(40, 8, "Total Benefits:", align='R')
+        self.set_text_color(22, 163, 74)
+        self.cell(35, 8, format_currency(total_savings), align='R', ln=1)
+        
+        self.set_xy(120, self.get_y())
+        self.set_font(FONT_FAMILY, 'B', 11)
+        self.set_text_color(100, 116, 139)
+        self.cell(40, 6, "Less Investment:", align='R')
+        self.set_text_color(185, 28, 28)
+        self.cell(35, 6, f"({format_currency(investment)})", align='R', ln=1)
+        
+        self.ln(2)
+        self.set_xy(120, self.get_y())
+        self.set_fill_color(240, 253, 244)
+        self.rect(120, self.get_y(), 75, 12, 'F')
+        self.set_xy(120, self.get_y() + 2)
+        self.set_font(FONT_FAMILY, 'B', 14)
+        self.set_text_color(21, 128, 61)
+        net = total_savings - investment
+        self.cell(40, 8, "NET VALUE:", align='R')
+        self.cell(35, 8, format_currency(net), align='R', ln=1)
+        self.ln(15)
 
 # --- GEMINI AGENT ---
 def run_gemini_agent(agent_role, model_name, prompt):
@@ -87,19 +249,17 @@ def extract_revenue_from_context(client_name, search_text):
     TASK: Identify annual revenue for {client_name}. Return integer (e.g. 50000000). Return null if not found.
     OUTPUT JSON: {{ "annual_revenue": (Number or null) }}
     """
-    result = run_gemini_agent("Revenue Scout", "gemini-2.5-flash", prompt) # Model updated
+    result = run_gemini_agent("Revenue Scout", "gemini-2.5-flash", prompt)
     if result and result.get("annual_revenue"): return result["annual_revenue"]
     return None
 
-# --- CORE LOGIC ---
-# (Keep your SELECTOR_LOGIC dictionary here exactly as it was in app (1).py)
+# --- SELECTOR LOGIC ---
 SELECTOR_LOGIC = {
     "Hammer QA": {
         "Efficiency": {"label": "Regression Automation", "desc": "Eliminates manual UAT", "formula": "Manual_Test_Hours * Releases * Hourly_Rate"},
         "Risk":       {"label": "Shift-Left Detection", "desc": "Prevents defects via CI/CD", "formula": "Defects_Caught_Early * Cost_Difference_to_Fix"},
         "Strategic":  {"label": "Agile Velocity", "desc": "Parallel execution", "formula": "Project_Days_Saved * Daily_Revenue_per_Service"}
     },
-    # ... (Include other products from previous file) ...
     "Hammer VoiceExplorer": {
         "Efficiency": {"label": "Discovery Automation", "desc": "Maps legacy IVRs with 80% less effort", "formula": "Discovery_Hours_Saved * Consultant_Rate"},
         "Risk":       {"label": "Design Adherence", "desc": "Identifies navigation errors", "formula": "Logic_Gaps_Found * Rework_Cost_per_Gap"},
@@ -140,7 +300,7 @@ def process_single_product(prod, client_name, industry, problem_statement, profi
             break
     if not product_rules: product_rules = SELECTOR_LOGIC["Hammer QA"]
 
-    # [FIX] Inject Manuals
+    # Inject Manuals
     manual_text = PRODUCT_MANUALS.get(prod, "")
     if len(manual_text) > 3000: manual_text = manual_text[:3000] + "...(truncated)"
 
@@ -186,7 +346,6 @@ def process_single_product(prod, client_name, industry, problem_statement, profi
        ]
     }}
     """
-    # Using 2.5-pro for the heavy lifting
     cfo_result = run_gemini_agent("CFO Analyst", "gemini-2.5-pro", cfo_prompt)
     return prod, (cfo_result if cfo_result else PRODUCT_DATA.get(prod, {}))
 
@@ -247,11 +406,9 @@ def generate_pdf():
     size_label = request.form.get('size_label', 'Medium')
     
     # 1. Reconstruct Profile from User Edits (The Accordion Data)
-    # We look for form fields starting with 'bench_'
     custom_profile = {"ops": {}, "dev": {}, "incidents": {}, "cx": {}}
     for key, val in request.form.items():
         if key.startswith("bench_"):
-            # key format: bench_ops_avg_cost_per_call
             parts = key.replace("bench_", "").split("_", 1)
             if len(parts) == 2:
                 category, metric = parts
@@ -273,7 +430,7 @@ def generate_pdf():
                 results[p_name] = data
             except: results[p] = {}
 
-    # 3. Calculate Totals (Defensive Math)
+    # 3. Calculate Totals
     costs = {}
     for p in prods:
         try:
@@ -287,7 +444,6 @@ def generate_pdf():
     tot_save = 0
     for p, data in results.items():
         comps = data.get('roi_components', [])
-        # Defensive math on AI output
         p_save = sum([extract_currency_value(c.get('savings_value', 0)) for c in comps])
         
         inv = costs[p]['cost'] * costs[p]['term']
@@ -298,22 +454,16 @@ def generate_pdf():
         tot_save += term_save
         roi_data[p] = {"investment": inv, "savings": term_save, "components": comps}
 
-    # 4. Generate PDF (Reuse ProReportPDF class from previous, add Appendix)
+    # 4. Generate PDF
     pdf = ProReportPDF()
     pdf.set_auto_page_break(True, 15)
     
-    # ... (Standard PDF Pages 1-X logic from previous file) ...
-    # [Insert standard generation code here: Header, Executive Summary, Scorecards, Charts, Product Pages]
-    # For brevity, I am omitting the copy-paste of the standard PDF drawing code here, 
-    # BUT I will add the Appendix Logic below.
-
-    # --- PDF GENERATION LOGIC ---
     pdf.add_page()
     pdf.ln(5)
-    pdf.set_font('Helvetica', 'B', 24)
+    pdf.set_font(FONT_FAMILY, 'B', 24)
     pdf.set_text_color(15, 23, 42)
     pdf.cell(0, 10, f"Strategic ROI Analysis", ln=True)
-    pdf.set_font('Helvetica', '', 14)
+    pdf.set_font(FONT_FAMILY, '', 14)
     pdf.set_text_color(100, 116, 139)
     pdf.cell(0, 8, f"Prepared for: {client}", ln=True)
     pdf.ln(10)
@@ -321,7 +471,7 @@ def generate_pdf():
     pdf.set_fill_color(241, 245, 249)
     pdf.rect(10, pdf.get_y(), 190, 25, 'F')
     pdf.set_xy(15, pdf.get_y()+5)
-    pdf.set_font('Helvetica', 'I', 10)
+    pdf.set_font(FONT_FAMILY, 'I', 10)
     pdf.set_text_color(71, 85, 105)
     pdf.multi_cell(180, 5, f"Focus: {prob}")
     pdf.ln(10)
@@ -333,7 +483,11 @@ def generate_pdf():
     roi_pct = ((tot_save-tot_inv)/tot_inv)*100 if tot_inv > 0 else 0
     pdf.card_box("ROI %", f"{roi_pct:.0f}%", "Return on Investment", 140, y, w, h)
     
-    # ... Product Pages Loop ...
+    pdf.set_y(y + h + 20)
+    # This call will now work because create_payback_chart is restored
+    chart_img = create_payback_chart(tot_inv, tot_save)
+    pdf.image(chart_img, x=10, w=190)
+    
     for p in prods:
         if p not in results: continue
         d = results[p]
@@ -342,12 +496,12 @@ def generate_pdf():
         pdf.add_page()
         pdf.chapter_title(f"Analysis: {p}")
         
-        pdf.set_font('Helvetica', 'I', 11)
+        pdf.set_font(FONT_FAMILY, 'I', 11)
         pdf.set_text_color(51, 65, 85)
         pdf.multi_cell(0, 6, sanitize_text(d.get('impact', '')))
         pdf.ln(8)
         
-        pdf.set_font('Helvetica', '', 10)
+        pdf.set_font(FONT_FAMILY, '', 10)
         pdf.set_text_color(15, 23, 42)
         for b in d.get('bullets', []):
             pdf.set_x(15)
@@ -392,121 +546,6 @@ def generate_pdf():
         download_name=f"ROI_Analysis_{client}.pdf",
         mimetype="application/pdf"
     )
-
-class ProReportPDF(FPDF):
-    # (Include your standard PDF class methods from app (1).py here: header, footer, chapter_title, card_box, draw_financial_table)
-    # Copied for completeness
-    def header(self):
-        self.set_fill_color(15, 23, 42)
-        self.rect(0, 0, 210, 25, 'F')
-        self.set_y(8)
-        self.set_font('Helvetica', 'B', 14)
-        self.set_text_color(255, 255, 255)
-        self.cell(10)
-        self.cell(0, 10, 'STRATEGIC VALUE ANALYSIS', ln=0)
-        self.set_font('Helvetica', '', 10)
-        self.set_text_color(200, 200, 200)
-        self.cell(0, 10, 'CONFIDENTIAL PREVIEW', ln=1, align='R')
-        self.ln(15)
-    
-    def footer(self):
-        self.set_y(-15)
-        self.set_font('Helvetica', 'I', 8)
-        self.set_text_color(128, 128, 128)
-        self.cell(0, 10, f'Page {self.page_no()}', align='C')
-
-    def chapter_title(self, title):
-        self.set_font('Helvetica', 'B', 16)
-        self.set_text_color(15, 23, 42)
-        self.cell(0, 8, sanitize_text(title), ln=True)
-        self.set_draw_color(37, 99, 235)
-        self.set_line_width(0.8)
-        self.line(10, self.get_y()+4, 200, self.get_y()+4)
-        self.ln(12)
-
-    def draw_financial_table(self, components, total_savings, investment):
-        start_y = self.get_y()
-        self.set_fill_color(241, 245, 249)
-        self.rect(10, start_y, 190, 10, 'F')
-        self.set_xy(15, start_y + 2)
-        self.set_font('Helvetica', 'B', 10)
-        self.set_text_color(71, 85, 105)
-        self.cell(90, 6, "Value Driver", ln=0)
-        self.cell(60, 6, "Basis of Calculation", ln=0)
-        self.cell(30, 6, "Annual Impact", align='R', ln=1)
-        self.ln(4)
-        y = self.get_y()
-        self.set_text_color(15, 23, 42)
-        for comp in components:
-            if self.get_y() > 250:
-                self.add_page()
-                y = 20
-                self.set_y(y)
-            label = sanitize_text(comp.get('label', 'Savings'))
-            calcs = sanitize_text(comp.get('calculation_text', ''))
-            val = comp.get('savings_value', 0)
-            self.set_xy(15, y)
-            self.set_font('Helvetica', 'B', 9)
-            self.multi_cell(85, 5, label, align='L')
-            y_end_1 = self.get_y()
-            self.set_xy(105, y)
-            self.set_font('Helvetica', 'I', 8)
-            self.set_text_color(100, 116, 139)
-            self.multi_cell(55, 5, calcs, align='L')
-            y_end_2 = self.get_y()
-            self.set_xy(160, y)
-            self.set_font('Helvetica', 'B', 10)
-            self.set_text_color(22, 163, 74)
-            self.cell(35, 5, format_currency(val), align='R')
-            y = max(y_end_1, y_end_2) + 4
-            self.set_draw_color(226, 232, 240)
-            self.line(15, y-2, 195, y-2)
-        self.ln(5)
-        self.set_xy(120, self.get_y())
-        self.set_font('Helvetica', 'B', 12)
-        self.set_text_color(15, 23, 42)
-        self.cell(40, 8, "Total Benefits:", align='R')
-        self.set_text_color(22, 163, 74)
-        self.cell(35, 8, format_currency(total_savings), align='R', ln=1)
-        self.set_xy(120, self.get_y())
-        self.set_font('Helvetica', 'B', 11)
-        self.set_text_color(100, 116, 139)
-        self.cell(40, 6, "Less Investment:", align='R')
-        self.set_text_color(185, 28, 28)
-        self.cell(35, 6, f"({format_currency(investment)})", align='R', ln=1)
-        self.ln(2)
-        self.set_xy(120, self.get_y())
-        self.set_fill_color(240, 253, 244)
-        self.rect(120, self.get_y(), 75, 12, 'F')
-        self.set_xy(120, self.get_y() + 2)
-        self.set_font('Helvetica', 'B', 14)
-        self.set_text_color(21, 128, 61)
-        net = total_savings - investment
-        self.cell(40, 8, "NET VALUE:", align='R')
-        self.cell(35, 8, format_currency(net), align='R', ln=1)
-        self.ln(15)
-
-    def card_box(self, label, value, subtext, x, y, w, h):
-        self.set_xy(x, y)
-        self.set_fill_color(255, 255, 255)
-        self.set_draw_color(226, 232, 240)
-        self.set_line_width(0.5)
-        self.rect(x, y, w, h, 'DF')
-        self.set_xy(x, y + 6)
-        self.set_font('Helvetica', 'B', 14)
-        if "ROI" in label or "SAVINGS" in label:
-             if "(" in value or "-" in value: self.set_text_color(185, 28, 28)
-             else: self.set_text_color(22, 163, 74)
-        else: self.set_text_color(15, 23, 42)
-        self.cell(w, 8, sanitize_text(value), align='C', ln=1)
-        self.set_xy(x, y + 16)
-        self.set_font('Helvetica', 'B', 8)
-        self.set_text_color(100, 116, 139)
-        self.cell(w, 5, sanitize_text(label), align='C', ln=1)
-        self.set_xy(x, y + 21)
-        self.set_font('Helvetica', 'I', 7)
-        self.set_text_color(148, 163, 184)
-        self.cell(w, 4, sanitize_text(subtext), align='C')
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
