@@ -8,20 +8,18 @@
     <style>
         .product-card { transition: all 0.2s; border: 1px solid #e2e8f0; }
         .product-card.active { border-color: #2563eb; background-color: #f8fafc; }
-        .spinner {
-            border: 3px solid rgba(255,255,255,0.3); border-top: 3px solid white;
-            border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite;
-        }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         .accordion-content { transition: max-height 0.3s ease-out; max-height: 0; overflow: hidden; }
         .accordion-content.open { max-height: 1000px; }
+        /* Custom pulse for the loading text */
+        @keyframes pulse-fast { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .animate-pulse-fast { animation: pulse-fast 1s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-800 font-sans">
     <div class="max-w-4xl mx-auto py-10 px-4">
         <div class="text-center mb-10">
             <h1 class="text-3xl font-bold text-slate-900">Strategic ROI Generator</h1>
-            <p class="text-slate-500">Research & Refine (v1.6)</p>
+            <p class="text-slate-500">Research & Refine (v1.9)</p>
         </div>
 
         <form id="roiForm" action="/generate" method="POST" class="bg-white shadow-xl rounded-xl p-8 border border-slate-200">
@@ -43,7 +41,19 @@
                     </div>
                     <div>
                         <label class="block text-sm font-medium">Industry</label>
-                        <input type="text" id="industry" name="industry" required class="w-full border rounded px-3 py-2">
+                        <select id="industry" name="industry" required class="w-full border rounded px-3 py-2 bg-white">
+                            <option value="" disabled selected>Select Industry...</option>
+                            <option value="Retail">Retail</option>
+                            <option value="Wholesale">Wholesale</option>
+                            <option value="Banking/Finance">Banking/Finance</option>
+                            <option value="Insurance">Insurance</option>
+                            <option value="Healthcare">Healthcare</option>
+                            <option value="Utilities">Utilities</option>
+                            <option value="BPO">BPO (Business Process Outsourcing)</option>
+                            <option value="Travel/Hospitality">Travel/Hospitality</option>
+                            <option value="Telco/Service Provider">Telco/Service Provider</option>
+                            <option value="UC/CC">UC/CC (Unified Comms & Contact Center)</option>
+                        </select>
                     </div>
                     <div>
                          <label class="block text-sm font-medium">Annual Revenue (Optional)</label>
@@ -57,7 +67,7 @@
             </div>
 
             <div id="researchLoading" class="hidden text-center py-8">
-                <div class="inline-block spinner border-slate-400 border-t-indigo-600 mb-2"></div>
+                <div class="inline-block w-5 h-5 border-2 border-slate-400 border-t-indigo-600 rounded-full animate-spin mb-2"></div>
                 <p class="text-slate-600">Analyzing Market Data...</p>
             </div>
 
@@ -121,9 +131,15 @@
                 </div>
             </div>
             
-             <div id="loadingContainer" class="hidden text-center py-4 mt-4">
-                <div class="inline-block spinner border-slate-400 border-t-green-600 mb-2"></div>
-                <p class="text-slate-600">Generating Forensic Analysis... (Download will start shortly)</p>
+            <div id="loadingContainer" class="hidden py-6 mt-4">
+                <div class="w-full bg-slate-200 rounded-full h-4 mb-3 overflow-hidden shadow-inner">
+                    <div id="thinkingBar" class="bg-gradient-to-r from-indigo-500 to-blue-600 h-4 rounded-full transition-all duration-300" style="width: 0%"></div>
+                </div>
+                
+                <div class="flex justify-between text-xs text-slate-500 px-1 font-medium">
+                    <span id="loadingStep">Initializing AI Agents...</span>
+                    <span class="font-mono text-indigo-600 animate-pulse-fast">PROCESSING</span>
+                </div>
             </div>
         </form>
     </div>
@@ -206,19 +222,45 @@
             }
         }
         
+        // MODIFIED: Submit handler with Progress Bar Logic
         document.getElementById('roiForm').addEventListener('submit', function() {
             const btnArea = document.getElementById('submitArea');
             const loader = document.getElementById('loadingContainer');
+            const bar = document.getElementById('thinkingBar');
+            const stepText = document.getElementById('loadingStep');
             
             // Show loader, hide button
             btnArea.classList.add('hidden');
             loader.classList.remove('hidden');
             
-            // Auto-reset UI after 5 seconds (assuming download started)
+            // Simulate "Thinking" Progress
+            let width = 1;
+            const interval = setInterval(() => {
+                if (width >= 95) {
+                    clearInterval(interval); // Hold at 95% until download starts
+                    stepText.innerText = "Finalizing PDF Report...";
+                } else {
+                    width++; 
+                    bar.style.width = width + '%';
+                    
+                    // Dynamic Status Updates
+                    if(width === 15) stepText.innerText = "Consulting Industry Benchmarks...";
+                    if(width === 30) stepText.innerText = "Running CFO Algorithm...";
+                    if(width === 50) stepText.innerText = "Synthesizing Product Manuals...";
+                    if(width === 75) stepText.innerText = "Compiling Forensic Analysis...";
+                }
+            }, 80); // Fills in approx 8 seconds
+
+            // Reset UI after 15 seconds (assumes download has triggered)
             setTimeout(() => {
-                loader.classList.add('hidden');
-                btnArea.classList.remove('hidden');
-            }, 5000);
+                bar.style.width = '100%';
+                stepText.innerText = "Download Starting!";
+                setTimeout(() => {
+                    loader.classList.add('hidden');
+                    btnArea.classList.remove('hidden');
+                    bar.style.width = '0%'; // Reset for next time
+                }, 1000);
+            }, 15000);
         });
     </script>
 </body>
