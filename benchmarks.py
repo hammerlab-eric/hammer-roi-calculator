@@ -6,13 +6,32 @@ def get_benchmark_profile(industry_input, revenue_input=None):
     1. Determines Business Size based on Industry + Revenue.
     2. Returns the specific dictionary of metrics for that profile.
     """
-    # 1. Normalize Industry
+    # 1. Normalize Industry & Map New Dropdown Values
+    # We map specific frontend options to our backend data keys
+    mapping = {
+        "Retail": "Retail",
+        "Wholesale": "Retail",             # Map Wholesale -> Retail
+        "Banking/Finance": "Finance",
+        "Insurance": "Insurance",
+        "Healthcare": "Healthcare",
+        "Utilities": "Utilities",
+        "BPO": "Technology",               # Map BPO -> Tech (High dev/ops intensity)
+        "Travel/Hospitality": "Retail",    # Map Travel -> Retail (High volume/churn)
+        "Telco/Service Provider": "Technology",
+        "UC/CC": "Technology"              # Map Unified Comms -> Technology
+    }
+
     industry_key = "Technology" # Default
     if industry_input:
-        for key in INDUSTRY_PROFILES.keys():
-            if key.lower() in industry_input.lower():
-                industry_key = key
-                break
+        # Check direct mapping first
+        if industry_input in mapping:
+            industry_key = mapping[industry_input]
+        else:
+            # Fallback to existing fuzzy search
+            for key in INDUSTRY_PROFILES.keys():
+                if key.lower() in industry_input.lower():
+                    industry_key = key
+                    break
     
     # 2. Determine Size
     size = "Medium" # Default
